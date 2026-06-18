@@ -14,23 +14,71 @@ use anyhow::{Context, Result};
 use crate::switcher::term::{self, RawMode};
 use crate::switcher::{fuzzy_score, Key};
 
-/// Extract http(s) URLs from text, trimming trailing punctuation, de-duplicated
-/// in first-seen order.
+/// Trailing / leading punctuation peeled off a candidate URL.
+const TRAIL: &[char] = &[')', '.', ',', ';', ':', '!', '?', ']', '}', '>', '"', '\''];
+const LEAD: &[char] = &['(', '[', '{', '<', '"', '\''];
+
+/// Schemes recognised verbatim (kept as-is, no prefix added).
+const SCHEMES: &[&str] = &["https://", "http://", "ftp://", "file://", "mailto:"];
+
+/// Extract URLs from text, de-duplicated in first-seen order. Recognises
+/// explicit-scheme URLs, `www.` hosts and path-bearing bare domains
+/// (`github.com/foo`); the latter two get `https://` prepended. A path is
+/// required for scheme-less domains, so bare filenames (`main.rs`,
+/// `config.json`) are never mistaken for URLs.
 pub fn extract_urls(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for token in text.split_whitespace() {
-        for scheme in ["https://", "http://"] {
-            if let Some(pos) = token.find(scheme) {
-                let u = token[pos..].trim_end_matches(|c: char| ").,;:!?]}>\"'".contains(c));
-                if u.len() > scheme.len() && seen.insert(u.to_string()) {
-                    out.push(u.to_string());
-                }
-                break;
+        if let Some(u) = url_from_token(token) {
+            if seen.insert(u.clone()) {
+                out.push(u);
             }
         }
     }
     out
+}
+
+fn url_from_token(token: &str) -> Option<String> {
+    // 1. Explicit scheme anywhere in the token (also peels leading "(", "[a](").
+    for scheme in SCHEMES {
+        if let Some(pos) = token.find(scheme) {
+            let u = token[pos..].trim_end_matches(TRAIL);
+            if u.len() > scheme.len() {
+                return Some(u.to_string());
+            }
+        }
+    }
+    // 2. www. host → assume https.
+    if let Some(pos) = token.find("www.") {
+        let u = token[pos..].trim_end_matches(TRAIL);
+        if u.len() > 4 && u[4..].contains('.') {
+            return Some(format!("https://{u}"));
+        }
+    }
+    // 3. Scheme-less, path-bearing domain (host.tld/…).
+    let cand = token.trim_start_matches(LEAD).trim_end_matches(TRAIL);
+    if is_domain_path(cand) {
+        return Some(format!("https://{cand}"));
+    }
+    None
+}
+
+/// True for `host.tld/path`: a dotted host with an alphabetic TLD and a slash.
+fn is_domain_path(s: &str) -> bool {
+    let Some(slash) = s.find('/') else {
+        return false;
+    };
+    let host = &s[..slash];
+    if !host.contains('.') {
+        return false;
+    }
+    let tld = host.rsplit('.').next().unwrap_or("");
+    tld.len() >= 2
+        && tld.chars().all(|c| c.is_ascii_alphabetic())
+        && host
+            .split('.')
+            .all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
 }
 
 /// Entry. With `--pane <id>` (the keybinding path): capture that pane and, if it
@@ -320,5 +368,30 @@ mod tests {
     fn finds_http_and_glued() {
         let urls = extract_urls("x=http://a.b/c end");
         assert_eq!(urls, vec!["http://a.b/c"]);
+    }
+
+    #[test]
+    fn www_gets_https_prefix() {
+        assert_eq!(extract_urls("visit www.google.com today"), vec!["https://www.google.com"]);
+        assert_eq!(extract_urls("(www.google.com)"), vec!["https://www.google.com"]);
+    }
+
+    #[test]
+    fn schemeless_domain_with_path() {
+        assert_eq!(
+            extract_urls("repo github.com/kenanpelit/tmux-anka here"),
+            vec!["https://github.com/kenanpelit/tmux-anka"]
+        );
+    }
+
+    #[test]
+    fn bare_filenames_and_pathless_domains_are_not_urls() {
+        assert!(extract_urls("edit main.rs and config.json").is_empty());
+        assert!(extract_urls("a bare github.com without a path").is_empty());
+    }
+
+    #[test]
+    fn other_schemes_kept_verbatim() {
+        assert_eq!(extract_urls("get ftp://files.x.com/a now"), vec!["ftp://files.x.com/a"]);
     }
 }
