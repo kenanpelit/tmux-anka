@@ -38,6 +38,12 @@ pub enum Cmd {
         /// File with pane text to pick from (default: stdin) — used inside the popup
         source: Option<String>,
     },
+    /// Copy stdin to the system clipboard (wayland/X/OSC52). For copy-pipe.
+    Clip {
+        /// Use the primary selection instead of the clipboard
+        #[arg(long)]
+        primary: bool,
+    },
     /// Interactive action menu (command/keybinding/process/window/pane)
     Menu {
         /// Internal: run the picker inside the popup (else open the popup)

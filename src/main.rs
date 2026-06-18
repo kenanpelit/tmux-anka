@@ -1,5 +1,6 @@
 mod capture;
 mod cli;
+mod clip;
 mod config;
 mod daemon;
 mod freeze;
@@ -39,6 +40,7 @@ fn run() -> Result<()> {
         Cmd::Up { name } => freeze::up(&name),
         Cmd::Switch => switcher::run(),
         Cmd::Url { pane, source } => url::run(pane.as_deref(), source.as_deref()),
+        Cmd::Clip { primary } => clip::run(primary),
         Cmd::Menu { run, client, session } => {
             menu::run(run, client.as_deref(), session.as_deref())
         }
