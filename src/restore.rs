@@ -19,9 +19,17 @@ pub fn restore(name: Option<&str>) -> Result<()> {
         bail!("no tmux server running");
     }
     let name = resolve_name(name)?;
-    let snap = load(&name)?;
-    let cfg = Config::load();
+    let snap = load_snapshot(&name)?;
+    let restored = restore_snapshot(&snap)?;
+    println!("restored snapshot '{name}' ({restored} sessions)");
+    Ok(())
+}
 
+/// Rebuild every session in a snapshot/blueprint, returning how many were
+/// (re)created. Non-destructive: a live session is skipped unless
+/// `@anka-restore-overwrite`. Shared by `restore` and `up`.
+pub fn restore_snapshot(snap: &Snapshot) -> Result<usize> {
+    let cfg = Config::load();
     let existing = existing_sessions();
     let mut restored = 0usize;
     for session in &snap.sessions {
@@ -32,13 +40,28 @@ pub fn restore(name: Option<&str>) -> Result<()> {
             .with_context(|| format!("restoring session '{}'", session.name))?;
         restored += 1;
     }
-
     if let Some(active) = &snap.client.active_session {
         tmux::run_ok(&["switch-client", "-t", active]);
     }
+    Ok(restored)
+}
 
-    println!("restored snapshot '{name}' ({restored} sessions)");
-    Ok(())
+/// Restore exactly one session from a snapshot (lazy per-session restore, used
+/// by the picker). Returns whether it was (re)created.
+pub fn restore_one(snap: &Snapshot, session_name: &str) -> Result<bool> {
+    let cfg = Config::load();
+    let session = snap
+        .sessions
+        .iter()
+        .find(|s| s.name == session_name)
+        .with_context(|| format!("session '{session_name}' not in snapshot"))?;
+    if existing_sessions().contains(&session.name) && !cfg.restore_overwrite {
+        return Ok(false); // already live
+    }
+    restore_session(session, &cfg)
+        .with_context(|| format!("restoring session '{}'", session.name))?;
+    tmux::run_ok(&["switch-client", "-t", &session.name]);
+    Ok(true)
 }
 
 /// Restore-on-start guard (called by `anka.tmux` on plugin load). Restores the
@@ -141,13 +164,29 @@ fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
 }
 
 /// The command to launch a pane with, or `None` for a plain shell.
-fn launch_cmd(pane: Option<&Pane>, _cfg: &Config) -> Option<String> {
+fn launch_cmd(pane: Option<&Pane>, cfg: &Config) -> Option<String> {
     let p = pane?;
     match p.restore.kind {
         RestoreKind::Shell => None,
         RestoreKind::Process => p.restore.command.clone(),
-        RestoreKind::Nvim => Some("nvim".to_string()),
+        RestoreKind::Nvim => Some(nvim_launch(p, cfg)),
     }
+}
+
+/// How to relaunch an nvim/vim pane.
+///
+/// With `@anka-strategy-nvim session` (the default), if a `Session.vim` exists
+/// in the pane's cwd we resume it (`nvim -S Session.vim`) — this is what users
+/// running vim-obsession or a manual `:mksession` get. Otherwise we replay the
+/// captured argv (reopening the same files), falling back to a bare editor.
+fn nvim_launch(p: &Pane, cfg: &Config) -> String {
+    if cfg.strategy_nvim == "session" {
+        let session = std::path::Path::new(&p.cwd).join("Session.vim");
+        if session.is_file() {
+            return format!("nvim -S {}", crate::process::shell_quote(&session.to_string_lossy()));
+        }
+    }
+    p.restore.command.clone().unwrap_or_else(|| "nvim".to_string())
 }
 
 fn resolve_name(name: Option<&str>) -> Result<String> {
@@ -157,7 +196,7 @@ fn resolve_name(name: Option<&str>) -> Result<String> {
     }
 }
 
-fn load(name: &str) -> Result<Snapshot> {
+pub fn load_snapshot(name: &str) -> Result<Snapshot> {
     let path = store::snapshot_json(name);
     let data =
         fs::read(&path).with_context(|| format!("reading snapshot {}", path.display()))?;
@@ -173,4 +212,63 @@ fn existing_sessions() -> Vec<String> {
 fn run_str(args: &[String]) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     tmux::run(&a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RestoreAction;
+
+    fn cfg(strategy_nvim: &str) -> Config {
+        Config {
+            capture_pane_contents: true,
+            restore_processes: vec![],
+            strategy_nvim: strategy_nvim.to_string(),
+            save_interval_mins: 0,
+            restore_on_start: false,
+            restore_overwrite: false,
+        }
+    }
+
+    fn nvim_pane(cwd: &str, command: Option<&str>) -> Pane {
+        Pane {
+            index: 0,
+            active: true,
+            title: String::new(),
+            cwd: cwd.to_string(),
+            command: "nvim".to_string(),
+            pid: 0,
+            history_size: 0,
+            contents: None,
+            restore: RestoreAction {
+                kind: RestoreKind::Nvim,
+                command: command.map(String::from),
+            },
+        }
+    }
+
+    #[test]
+    fn nvim_session_strategy_resumes_existing_session_vim() {
+        let dir = std::env::temp_dir().join(format!("anka-nvim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Session.vim"), "").unwrap();
+        let p = nvim_pane(dir.to_str().unwrap(), Some("nvim a.rs"));
+        assert_eq!(
+            nvim_launch(&p, &cfg("session")),
+            format!("nvim -S {}/Session.vim", dir.display())
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn nvim_replays_captured_argv_when_no_session() {
+        let p = nvim_pane("/no/such/anka/dir", Some("nvim a.rs b.rs"));
+        assert_eq!(nvim_launch(&p, &cfg("session")), "nvim a.rs b.rs");
+    }
+
+    #[test]
+    fn nvim_falls_back_to_bare_editor() {
+        let p = nvim_pane("/no/such/anka/dir", None);
+        assert_eq!(nvim_launch(&p, &cfg("session")), "nvim");
+    }
 }

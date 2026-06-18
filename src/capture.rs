@@ -144,9 +144,11 @@ fn display(fmt: &str) -> Option<String> {
 
 fn resolve_restore(cfg: &Config, p: &PaneRaw) -> RestoreAction {
     if p.command == "nvim" || p.command == "vim" {
+        // Capture the full argv (the files being edited) so restore reopens
+        // them; the `session` strategy may instead resume a Session.vim.
         return RestoreAction {
             kind: RestoreKind::Nvim,
-            command: None,
+            command: process::foreground_command(p.pid),
         };
     }
     if let Some(full) = process::foreground_command(p.pid) {

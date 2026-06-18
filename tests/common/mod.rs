@@ -119,6 +119,26 @@ impl Server {
         self.anka_command(args).output().expect("spawn anka")
     }
 
+    /// Run anka feeding `input` to its stdin (for the interactive picker).
+    pub fn anka_stdin(&self, args: &[&str], input: &str) -> Output {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = self
+            .anka_command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn anka");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().expect("anka output")
+    }
+
     pub fn snapshot_json(&self, name: &str) -> PathBuf {
         self.dir.join("snapshots").join(name).join("snapshot.json")
     }
