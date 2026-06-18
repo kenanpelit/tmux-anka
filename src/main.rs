@@ -36,7 +36,7 @@ fn run() -> Result<()> {
         Cmd::Freeze { name, script } => freeze::freeze(name.as_deref(), script),
         Cmd::Up { name } => freeze::up(&name),
         Cmd::Switch => switcher::run(),
-        Cmd::Url { source } => url::run(source.as_deref()),
+        Cmd::Url { pane, source } => url::run(pane.as_deref(), source.as_deref()),
         Cmd::Session { action } => session::run(action),
         Cmd::Status => status::print(),
         Cmd::Daemon => daemon::run(),

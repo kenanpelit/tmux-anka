@@ -122,8 +122,12 @@ picker, and opens the chosen one in your browser — `@anka-url-browser` if set,
 else `$BROWSER`, else `xdg-open`. No fzf/extra tools. Bind it:
 
 ```tmux
-bind u run-shell -b "tmux capture-pane -p -J -t '#{pane_id}' -S -3000 > /tmp/anka-url.txt; tmux display-popup -E '~/.tmux/plugins/tmux-anka/bin/anka url /tmp/anka-url.txt'"
+bind u run-shell -b "~/.tmux/plugins/tmux-anka/bin/anka url --pane '#{pane_id}'"
 ```
+
+`anka url --pane` captures the pane (run-shell expands `#{pane_id}`; a
+`display-popup` would not), and if it finds URLs reopens itself in a popup for
+the picker. `anka url [file]` / `anka url` (stdin) are the picker itself.
 
 `⏎` switches to a live session, restores a snapshot one, jumps to a window, or
 opens a zoxide dir as a new session. Type a name that matches nothing and `⏎` to

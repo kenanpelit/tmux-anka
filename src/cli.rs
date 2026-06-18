@@ -30,9 +30,12 @@ pub enum Cmd {
     Up { name: String },
     /// Interactive session switcher (live + snapshot + zoxide)
     Switch,
-    /// Pick a URL from captured pane text and open it in $BROWSER
+    /// Pick a URL from pane text and open it (in $BROWSER / @anka-url-browser)
     Url {
-        /// File with the pane text (default: stdin)
+        /// Capture this pane id, then open the picker in a popup (for keybindings)
+        #[arg(long)]
+        pane: Option<String>,
+        /// File with pane text to pick from (default: stdin) — used inside the popup
         source: Option<String>,
     },
     /// Session management actions (sessionist-style)

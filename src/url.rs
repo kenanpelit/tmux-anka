@@ -33,9 +33,38 @@ pub fn extract_urls(text: &str) -> Vec<String> {
     out
 }
 
-/// Entry: read pane text from `source` (a file path, or stdin when `None`),
-/// extract URLs, pick one, open it.
-pub fn run(source: Option<&str>) -> Result<()> {
+/// Entry. With `--pane <id>` (the keybinding path): capture that pane and, if it
+/// has URLs, reopen ourselves inside a `display-popup` for the picker. Otherwise
+/// (inside the popup): read `source`/stdin, extract, pick, open.
+pub fn run(pane: Option<&str>, source: Option<&str>) -> Result<()> {
+    if let Some(pane_id) = pane {
+        return run_pane(pane_id);
+    }
+    pick_from(source)
+}
+
+/// Keybinding path (no tty): capture the pane, then hand off to a popup that
+/// runs the picker. `#{pane_id}` only expands in the calling run-shell, which is
+/// why capture happens here and not inside the popup.
+fn run_pane(pane_id: &str) -> Result<()> {
+    let text = crate::tmux::run(&["capture-pane", "-p", "-J", "-t", pane_id, "-S", "-3000"])
+        .unwrap_or_default();
+    if extract_urls(&text).is_empty() {
+        crate::tmux::run_ok(&["display-message", "anka: no URLs in this pane"]);
+        return Ok(());
+    }
+    // Stash the text in a file (keeps the popup's stdin free for keystrokes) and
+    // reopen ourselves in the popup for the interactive picker.
+    let tmp = std::env::temp_dir().join(format!("anka-url-{}.txt", pane_id.trim_start_matches('%')));
+    std::fs::write(&tmp, &text).with_context(|| format!("writing {}", tmp.display()))?;
+    let exe = std::env::current_exe()?;
+    let cmd = format!("{} url {}", exe.display(), tmp.display());
+    crate::tmux::run_ok(&["display-popup", "-w", "70%", "-h", "60%", "-E", &cmd]);
+    let _ = std::fs::remove_file(&tmp);
+    Ok(())
+}
+
+fn pick_from(source: Option<&str>) -> Result<()> {
     let text = match source {
         Some(path) => std::fs::read_to_string(path)
             .with_context(|| format!("reading {path}"))?,
