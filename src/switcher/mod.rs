@@ -2,5 +2,6 @@
 //! (and windows / zoxide dirs), split into a pure state machine and thin I/O.
 
 mod state;
+mod term;
 
 pub use state::*;
