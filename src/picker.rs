@@ -72,8 +72,9 @@ fn run_picker(items: &[String], title: &str, full: bool) -> Result<(Hit, String)
                         return Ok((Hit::Ctrl(c, i), query));
                     }
                 }
-                Key::Up => cursor = cursor.saturating_sub(1),
-                Key::Down if cursor + 1 < filtered.len() => cursor += 1,
+                // bottom-anchored: best is at the bottom, so Down moves toward it
+                Key::Up if cursor + 1 < filtered.len() => cursor += 1,
+                Key::Down => cursor = cursor.saturating_sub(1),
                 Key::Char(c) => {
                     query.push(c);
                     filtered = refilter(items, &query);
@@ -145,14 +146,23 @@ fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, titl
     let rem = inner.saturating_sub(3 + tt.chars().count());
     out.push_str(&format!("{C_BORDER}╭─ {C_TITLE}{tt}{C_BORDER} {}╮{R}", "─".repeat(rem)));
 
-    let start = if cursor >= list_h && filtered.len() > list_h {
-        (cursor + 1 - list_h).min(filtered.len() - list_h)
-    } else {
-        0
-    };
     let body_w = inner.saturating_sub(4);
-    for (row, idx) in (start..filtered.len().min(start + list_h)).enumerate() {
-        let r = row as u16 + 2;
+    // fzf-style: results sit at the bottom (just above the query), best match
+    // nearest it, growing upward. `list_bot` is the row above the query line.
+    let list_bot = bottom - 2;
+    let start = cursor.saturating_sub(list_h.saturating_sub(1));
+    let visible = filtered.len().saturating_sub(start).min(list_h);
+    // empty rows fill the TOP of the list area (above the results)
+    for r in 2..(list_bot + 1 - visible as u16) {
+        out.push_str(&term::move_to(r, 1));
+        out.push_str(&format!("{C_BORDER}│{R}"));
+        out.push_str(&term::move_to(r, cols));
+        out.push_str(&format!("{C_BORDER}│{R}"));
+    }
+    // results: j=0 (best in window) on the bottom row, growing upward
+    for j in 0..visible {
+        let idx = start + j;
+        let r = list_bot - j as u16;
         out.push_str(&term::move_to(r, 1));
         out.push_str(&format!("{C_BORDER}│{R}"));
         out.push_str(&term::move_to(r, 2));
@@ -171,13 +181,6 @@ fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, titl
             out.push_str("\x1b[1m");
         }
         out.push_str(&format!("{badge} {label}{R}"));
-        out.push_str(&term::move_to(r, cols));
-        out.push_str(&format!("{C_BORDER}│{R}"));
-    }
-    for row in (filtered.len().min(start + list_h) - start)..list_h {
-        let r = row as u16 + 2;
-        out.push_str(&term::move_to(r, 1));
-        out.push_str(&format!("{C_BORDER}│{R}"));
         out.push_str(&term::move_to(r, cols));
         out.push_str(&format!("{C_BORDER}│{R}"));
     }
