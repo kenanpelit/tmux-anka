@@ -12,7 +12,8 @@ const C_BORDER: &str = "\x1b[38;5;240m";
 const C_TITLE: &str = "\x1b[1;38;5;75m";
 const C_NUM: &str = "\x1b[38;5;220m";
 const C_ACCENT: &str = "\x1b[38;5;75m";
-const C_MATCH: &str = "\x1b[1;38;5;214m";
+const C_MATCH: &str = "\x1b[38;5;214m";
+const C_SEL_BG: &str = "\x1b[48;5;238m";
 const FG: &str = "\x1b[39m";
 const R: &str = "\x1b[0m";
 
@@ -164,29 +165,46 @@ fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, titl
     for j in 0..visible {
         let idx = start + j;
         let r = list_bot - j as u16;
+        let sel = idx == cursor;
         out.push_str(&term::move_to(r, 1));
         out.push_str(&format!("{C_BORDER}│{R}"));
         out.push_str(&term::move_to(r, 2));
-        let sel = idx == cursor;
-        let bar = if sel {
-            format!("{C_ACCENT}▌{R}")
+        // selected row: full-width background + bold (so the cursor row is obvious).
+        // Inside the bg we only change/reset the *foreground* (\x1b[39m), never a
+        // full reset, so the background survives to the right edge.
+        if sel {
+            out.push_str(C_SEL_BG);
+            out.push_str("\x1b[1m");
+        }
+        // marker + number badge (2 cols each)
+        if sel {
+            out.push_str(&format!("{C_ACCENT}▌{FG} "));
         } else {
-            " ".to_string()
-        };
-        out.push_str(&bar);
+            out.push_str("  ");
+        }
         let num = idx + 1;
-        let badge = if num <= 9 { format!("{C_NUM}{num}{FG}") } else { " ".into() };
+        if num <= 9 {
+            out.push_str(&format!("{C_NUM}{num}{FG} "));
+        } else {
+            out.push_str("  ");
+        }
+        // label with live match highlight (foreground only, so bg/bold persist)
         let item = &items[filtered[idx]];
         let positions = if query.is_empty() { None } else { fuzzy_positions(query, item) };
-        let base = if sel { "\x1b[1m" } else { "" };
-        out.push_str(&term::move_to(r, 4));
-        out.push_str(&format!("{badge} {base}"));
-        // highlight the chars matched by the live query (fzf-style)
+        let mut vis = 4usize;
         for (p, ch) in item.chars().take(body_w).enumerate() {
             if positions.as_ref().is_some_and(|v| v.contains(&p)) {
-                out.push_str(&format!("{C_MATCH}{ch}{R}{base}"));
+                out.push_str(&format!("{C_MATCH}{ch}{FG}"));
             } else {
                 out.push(ch);
+            }
+            vis += 1;
+        }
+        // pad the selected row's background out to the right border
+        if sel {
+            let pad = inner.saturating_sub(vis);
+            if pad > 0 {
+                out.push_str(&" ".repeat(pad));
             }
         }
         out.push_str(R);
