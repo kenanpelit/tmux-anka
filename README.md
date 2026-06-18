@@ -72,7 +72,7 @@ git clone https://github.com/kenanpelit/tmux-anka \
 |-----|--------|
 | `prefix + C-s` | Save snapshot |
 | `prefix + C-r` | Restore last snapshot |
-| `prefix + s` | Session switcher (live + snapshot + zoxide) |
+| `prefix + o` | Session switcher (live + snapshot + zoxide) |
 | `prefix + P` | Pick a session to restore (opens the switcher) |
 | `prefix + C` | New named session |
 | `prefix + X` | Kill the current session |
@@ -95,27 +95,29 @@ anka restore work       # bring "work" back (never clobbers a live session)
 anka rm work
 ```
 
-**Switch sessions** (`prefix + s`) — an interactive popup over your live
+**Switch sessions** (`prefix + o`) — an interactive popup over your live
 sessions *and* the offline ones in your last snapshot (and, with `zoxide`,
-frecent dirs). Type to fuzzy-filter, `Tab` cycles sessions/windows/zoxide, and
-the right pane previews the highlighted target:
+frecent dirs). Rows are numbered: press `1`-`9` to jump straight to one. Type to
+fuzzy-filter, move with `↑`/`↓` or `^p`/`^n`, and `Tab` cycles
+sessions/windows/zoxide:
 
 ```
-  search: dev▌
-┌ sessions ──────────┬ preview ───────────┐
-│ > KENP    5p (live)│ $ cargo test       │
-│   dev     2p       │ running 23 tests   │
-│   media   3p       │ ok. 23 passed      │
-│   Tor     1p (snap)│                    │
-└────────────────────┴────────────────────┘
- ↑↓ select · ⏎ go · ^n new · ^r rename · ^x kill · Tab mode · esc cancel
+ anka switch · sessions · 4 items
+ 1 KENP    (live)
+ 2 dev     (live)
+ 3 media   (live)
+ 4 Tor     (snapshot)
+ > dev▌
+ ↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · Tab mode · esc
 ```
 
 `⏎` switches to a live session, restores a snapshot one, jumps to a window, or
-opens a zoxide dir as a new session. `^n` makes a new session, `^r` renames,
-`^x` kills. (`prefix + P` opens the same switcher; on a non-tty it degrades to a
-numbered menu.) For quick, prompt-free actions there are also `prefix + C` (new),
-`X` (kill), `@` (promote pane), `g` (switch by name), and `S` (last session).
+opens a zoxide dir as a new session. Type a name that matches nothing and `⏎` to
+create it; `^r` renames the selected session, `^x` kills it. A preview pane
+(`@anka-switch-preview on`) shows the highlighted target. (`prefix + P` opens the
+same switcher; on a non-tty it degrades to a numbered menu.) For quick,
+prompt-free actions there are also `prefix + C` (new), `X` (kill), `@` (promote
+pane), `g` (switch by name), and `S` (last session).
 
 **Freeze a layout to a re-runnable blueprint** — a hand-editable template you can
 relaunch anywhere, independent of the rolling snapshots:
@@ -153,7 +155,7 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-switch-preview` | `on` | Show the preview pane in the switcher |
 | `@anka-zoxide` | `on` | Enable the zoxide mode when `zoxide` is installed |
 | `@anka-save-key` / `@anka-restore-key` / `@anka-pick-key` | `C-s` / `C-r` / `P` | Snapshot keys |
-| `@anka-switch-key` | `s` | Open the switcher |
+| `@anka-switch-key` | `o` | Open the switcher (leaves `prefix + s` = choose-tree) |
 | `@anka-new-key` / `@anka-kill-key` / `@anka-promote-key` | `C` / `X` / `@` | Session new/kill/promote |
 | `@anka-switch-name-key` / `@anka-last-key` | `g` / `S` | Switch by name / last session |
 

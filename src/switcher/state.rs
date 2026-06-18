@@ -86,7 +86,7 @@ pub enum Key {
     Tab,
     Backspace,
     Char(char),
-    New,
+    Digit(usize), // 1-9: jump straight to (and activate) that row
     Rename,
     Delete,
     Cancel,
@@ -116,7 +116,6 @@ pub enum Step {
 }
 
 enum Prompt {
-    New(String),
     Rename(String),
 }
 
@@ -170,10 +169,9 @@ impl State {
         self.filtered.get(self.cursor).map(|&i| &self.items[i])
     }
 
-    /// `(label, buffer)` while a New/Rename name is being typed.
+    /// `(label, buffer)` while a Rename name is being typed.
     pub fn prompt(&self) -> Option<(&'static str, &str)> {
         match &self.prompt {
-            Some(Prompt::New(b)) => Some(("New session:", b)),
             Some(Prompt::Rename(b)) => Some(("Rename to:", b)),
             None => None,
         }
@@ -228,13 +226,15 @@ impl State {
             }
             Key::Enter => match self.selected().cloned() {
                 Some(it) => Step::Exit(Exit::Activate(it)),
+                // Nothing matches the query → create a session named after it.
                 None if !self.query.is_empty() => Step::Exit(Exit::NewSession(self.query.clone())),
                 None => Step::Exit(Exit::Cancel),
             },
-            Key::New => {
-                self.prompt = Some(Prompt::New(self.query.clone()));
-                Step::Redraw
-            }
+            // Digit hotkey: jump straight to that row and activate it.
+            Key::Digit(n) => match self.filtered.get(n.wrapping_sub(1)) {
+                Some(&i) => Step::Exit(Exit::Activate(self.items[i].clone())),
+                None => Step::Redraw,
+            },
             Key::Rename => match self.selected() {
                 Some(Item::Live(n)) | Some(Item::Snapshot(n)) => {
                     self.prompt = Some(Prompt::Rename(n.clone()));
@@ -251,12 +251,15 @@ impl State {
     }
 
     fn apply_prompt(&mut self, key: Key) -> Step {
-        let buf = match self.prompt.as_mut().unwrap() {
-            Prompt::New(b) | Prompt::Rename(b) => b,
-        };
+        let Prompt::Rename(buf) = self.prompt.as_mut().unwrap();
         match key {
             Key::Char(c) => {
                 buf.push(c);
+                Step::Redraw
+            }
+            Key::Digit(n) => {
+                // In a prompt, digits are literal text, not a jump.
+                buf.push(char::from_digit(n as u32, 10).unwrap_or('0'));
                 Step::Redraw
             }
             Key::Backspace => {
@@ -268,13 +271,10 @@ impl State {
                 Step::Redraw
             }
             Key::Enter => {
-                let p = self.prompt.take().unwrap();
-                match p {
-                    Prompt::New(name) => Step::Exit(Exit::NewSession(name)),
-                    Prompt::Rename(to) => match self.selected().cloned() {
-                        Some(item) => Step::Stay(Stay::Rename { item, to }),
-                        None => Step::Redraw,
-                    },
+                let Prompt::Rename(to) = self.prompt.take().unwrap();
+                match self.selected().cloned() {
+                    Some(item) => Step::Stay(Stay::Rename { item, to }),
+                    None => Step::Redraw,
                 }
             }
             _ => Step::Redraw,
@@ -366,16 +366,43 @@ mod apply_tests {
     }
 
     #[test]
-    fn new_prompt_then_enter_creates_session() {
+    fn enter_on_no_match_creates_named_session() {
         let mut s = st();
-        s.apply(Key::Char('w')); // query "w" → prefilled into the New prompt
-        s.apply(Key::New);
-        assert!(s.prompt().is_some());
-        s.apply(Key::Char('x'));
+        for c in "wx".chars() {
+            s.apply(Key::Char(c)); // "wx" matches nothing
+        }
+        assert!(s.visible().is_empty());
         match s.apply(Key::Enter) {
             Step::Exit(Exit::NewSession(name)) => assert_eq!(name, "wx"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn digit_jumps_to_and_activates_row() {
+        let mut s = st(); // [KENP, dev, old]
+        match s.apply(Key::Digit(2)) {
+            Step::Exit(Exit::Activate(Item::Live(n))) => assert_eq!(n, "dev"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_range_digit_is_ignored() {
+        let mut s = st();
+        assert!(matches!(s.apply(Key::Digit(9)), Step::Redraw));
+    }
+
+    #[test]
+    fn digit_in_rename_prompt_is_literal() {
+        let mut s = st();
+        s.apply(Key::Rename); // KENP
+        for _ in 0..4 {
+            s.apply(Key::Backspace);
+        }
+        s.apply(Key::Char('w'));
+        s.apply(Key::Digit(2));
+        assert_eq!(s.prompt().map(|(_, b)| b), Some("w2"));
     }
 
     #[test]
@@ -411,7 +438,7 @@ mod apply_tests {
     #[test]
     fn prompt_cancel_returns_to_list() {
         let mut s = st();
-        s.apply(Key::New);
+        s.apply(Key::Rename);
         assert!(s.prompt().is_some());
         assert!(matches!(s.apply(Key::Cancel), Step::Redraw));
         assert!(s.prompt().is_none());

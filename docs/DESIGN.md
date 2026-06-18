@@ -142,12 +142,15 @@ the `@anka_status` user option when it saves; users reference `#{@anka_status}`.
 Native replacement for `tmux-sessionist` (quick actions) and `tmux-sessionx`
 (fuzzy switcher), so neither plugin is needed.
 
-- **Switcher** (`anka switch`, `prefix + s`): an interactive popup over a unified
-  list — live sessions, the offline sessions in the `last` snapshot, all windows,
-  and (with `zoxide`) frecent dirs — `Tab` cycles those modes. Type to fuzzy
-  filter; a right-hand pane previews the highlighted target (`capture-pane`, a
-  snapshot summary, or a dir listing). `⏎` switches / restores / jumps / opens a
-  dir as a new session; `^n` new, `^r` rename, `^x` kill.
+- **Switcher** (`anka switch`, `prefix + o` — leaves `prefix + s` as tmux's
+  `choose-tree`): an interactive popup over a unified list — live sessions, the
+  offline sessions in the `last` snapshot, all windows, and (with `zoxide`)
+  frecent dirs — `Tab` cycles those modes. Rows are numbered; `1`-`9` jump
+  straight to a row. Type to fuzzy filter, move with `↑`/`↓` or `^p`/`^n`; an
+  optional right-hand pane (`@anka-switch-preview`) previews the highlighted
+  target. `⏎` switches / restores / jumps / opens a dir as a new session (or, if
+  the query matches nothing, creates a session named after it); `^r` rename,
+  `^x` kill.
   - Built **without** a TUI crate: a pure state machine (`switcher::state` —
     items, fuzzy match, `apply(Key) -> Step`) drives a thin I/O shell
     (`switcher::term` raw mode via `stty` + a stdin-byte key parser;

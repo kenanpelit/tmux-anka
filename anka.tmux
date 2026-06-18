@@ -42,7 +42,7 @@ opt() { tmux show-options -gqv "$1"; }
 SAVE_KEY="$(opt @anka-save-key)";       SAVE_KEY="${SAVE_KEY:-C-s}"
 RESTORE_KEY="$(opt @anka-restore-key)"; RESTORE_KEY="${RESTORE_KEY:-C-r}"
 PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-P}"
-SWITCH_KEY="$(opt @anka-switch-key)";           SWITCH_KEY="${SWITCH_KEY:-s}"
+SWITCH_KEY="$(opt @anka-switch-key)";           SWITCH_KEY="${SWITCH_KEY:-o}"
 NEW_KEY="$(opt @anka-new-key)";                 NEW_KEY="${NEW_KEY:-C}"
 KILL_KEY="$(opt @anka-kill-key)";               KILL_KEY="${KILL_KEY:-X}"
 PROMOTE_KEY="$(opt @anka-promote-key)";         PROMOTE_KEY="${PROMOTE_KEY:-@}"

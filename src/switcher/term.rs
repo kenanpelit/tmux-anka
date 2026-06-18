@@ -16,7 +16,8 @@ pub fn parse_key(buf: &[u8]) -> Option<(Option<Key>, usize)> {
         b'\r' | b'\n' => Some((Some(Key::Enter), 1)),
         b'\t' => Some((Some(Key::Tab), 1)),
         0x7f | 0x08 => Some((Some(Key::Backspace), 1)),
-        0x0e => Some((Some(Key::New), 1)),    // ^N
+        0x0e => Some((Some(Key::Down), 1)),   // ^N (next, fzf-style)
+        0x10 => Some((Some(Key::Up), 1)),     // ^P (prev, fzf-style)
         0x12 => Some((Some(Key::Rename), 1)), // ^R
         0x18 => Some((Some(Key::Delete), 1)), // ^X
         0x03 => Some((Some(Key::Cancel), 1)), // ^C
@@ -36,6 +37,7 @@ pub fn parse_key(buf: &[u8]) -> Option<(Option<Key>, usize)> {
             }
             Some((Some(Key::Cancel), 2)) // ESC + other → treat as cancel
         }
+        b'1'..=b'9' => Some((Some(Key::Digit((b0 - b'0') as usize)), 1)),
         0x20..=0x7e => Some((Some(Key::Char(b0 as char)), 1)),
         0x80.. => {
             // UTF-8 multibyte: decode just the first char.
@@ -121,11 +123,14 @@ mod tests {
         assert!(matches!(parse_key(b"\n"), Some((Some(Key::Enter), 1))));
         assert!(matches!(parse_key(&[0x7f]), Some((Some(Key::Backspace), 1))));
         assert!(matches!(parse_key(b"\t"), Some((Some(Key::Tab), 1))));
-        assert!(matches!(parse_key(&[0x0e]), Some((Some(Key::New), 1))));
+        assert!(matches!(parse_key(&[0x0e]), Some((Some(Key::Down), 1)))); // ^N
+        assert!(matches!(parse_key(&[0x10]), Some((Some(Key::Up), 1)))); // ^P
         assert!(matches!(parse_key(&[0x12]), Some((Some(Key::Rename), 1))));
         assert!(matches!(parse_key(&[0x18]), Some((Some(Key::Delete), 1))));
         assert!(matches!(parse_key(&[0x03]), Some((Some(Key::Cancel), 1))));
         assert!(matches!(parse_key(&[0x1b]), Some((Some(Key::Cancel), 1))));
+        assert!(matches!(parse_key(b"3"), Some((Some(Key::Digit(3)), 1))));
+        assert!(matches!(parse_key(b"a"), Some((Some(Key::Char('a')), 1))));
     }
 
     #[test]

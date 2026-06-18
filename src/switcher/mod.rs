@@ -308,11 +308,14 @@ fn render(state: &State, preview: &str, cfg: &Config) {
     let start = scroll_start(state.cursor(), vis.len(), list_h);
     for (row, idx) in (start..vis.len().min(start + list_h)).enumerate() {
         out.push_str(&term::move_to(row as u16 + 2, 1));
-        let label = truncate(&item_label(vis[idx]), left_w.saturating_sub(2));
+        // 1-based number (1-9 are jump hotkeys; rows past 9 show a space).
+        let num = idx + 1;
+        let tag = if num <= 9 { num.to_string() } else { " ".into() };
+        let label = truncate(&item_label(vis[idx]), left_w.saturating_sub(3));
         if idx == state.cursor() {
-            out.push_str(&format!("\x1b[7m> {label}\x1b[0m"));
+            out.push_str(&format!("\x1b[7m{tag} {label}\x1b[0m"));
         } else {
-            out.push_str(&format!("  {label}"));
+            out.push_str(&format!("{tag} {label}"));
         }
     }
 
@@ -332,7 +335,7 @@ fn render(state: &State, preview: &str, cfg: &Config) {
     }
     out.push_str(&term::move_to(rows, 1));
     out.push_str(&truncate(
-        "↑↓ select · ⏎ go · ^n new · ^r rename · ^x kill · Tab mode · esc cancel",
+        "↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · Tab mode · esc",
         cols as usize,
     ));
 
