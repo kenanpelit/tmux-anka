@@ -71,6 +71,217 @@ pub fn fuzzy_score(query: &str, hay: &str) -> Option<i32> {
     (qi == q.len()).then_some(score)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mode {
+    Sessions,
+    Windows,
+    Zoxide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Key {
+    Up,
+    Down,
+    Enter,
+    Tab,
+    Backspace,
+    Char(char),
+    New,
+    Rename,
+    Delete,
+    Cancel,
+}
+
+/// Effects that keep the switcher open and reload its items afterwards.
+#[derive(Debug)]
+pub enum Stay {
+    Kill(Item),
+    Rename { item: Item, to: String },
+}
+
+/// Effects that close the switcher (popup).
+#[derive(Debug)]
+pub enum Exit {
+    Activate(Item),
+    NewSession(String),
+    Cancel,
+}
+
+#[derive(Debug)]
+pub enum Step {
+    Redraw,
+    PreviewChanged,
+    Stay(Stay),
+    Exit(Exit),
+}
+
+enum Prompt {
+    New(String),
+    Rename(String),
+}
+
+pub struct State {
+    mode: Mode,
+    items: Vec<Item>,
+    filtered: Vec<usize>,
+    query: String,
+    cursor: usize,
+    prompt: Option<Prompt>,
+}
+
+impl State {
+    pub fn new(items: Vec<Item>, mode: Mode) -> Self {
+        let mut s = State {
+            mode,
+            items,
+            filtered: vec![],
+            query: String::new(),
+            cursor: 0,
+            prompt: None,
+        };
+        s.refilter();
+        s
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Replace the item set (used when the mode changes), resetting the cursor.
+    pub fn set_items(&mut self, items: Vec<Item>) {
+        self.items = items;
+        self.cursor = 0;
+        self.refilter();
+    }
+
+    pub fn visible(&self) -> Vec<&Item> {
+        self.filtered.iter().map(|&i| &self.items[i]).collect()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn selected(&self) -> Option<&Item> {
+        self.filtered.get(self.cursor).map(|&i| &self.items[i])
+    }
+
+    /// `(label, buffer)` while a New/Rename name is being typed.
+    pub fn prompt(&self) -> Option<(&'static str, &str)> {
+        match &self.prompt {
+            Some(Prompt::New(b)) => Some(("New session:", b)),
+            Some(Prompt::Rename(b)) => Some(("Rename to:", b)),
+            None => None,
+        }
+    }
+
+    fn refilter(&mut self) {
+        let mut scored: Vec<(usize, i32)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| fuzzy_score(&self.query, &item_key(it)).map(|sc| (i, sc)))
+            .collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        self.filtered = scored.into_iter().map(|(i, _)| i).collect();
+        if self.cursor >= self.filtered.len() {
+            self.cursor = self.filtered.len().saturating_sub(1);
+        }
+    }
+
+    pub fn apply(&mut self, key: Key) -> Step {
+        if self.prompt.is_some() {
+            return self.apply_prompt(key);
+        }
+        match key {
+            Key::Char(c) => {
+                self.query.push(c);
+                self.refilter();
+                Step::Redraw
+            }
+            Key::Backspace => {
+                self.query.pop();
+                self.refilter();
+                Step::Redraw
+            }
+            Key::Up => {
+                self.cursor = self.cursor.saturating_sub(1);
+                Step::PreviewChanged
+            }
+            Key::Down => {
+                if self.cursor + 1 < self.filtered.len() {
+                    self.cursor += 1;
+                }
+                Step::PreviewChanged
+            }
+            Key::Tab => {
+                self.mode = match self.mode {
+                    Mode::Sessions => Mode::Windows,
+                    Mode::Windows => Mode::Zoxide,
+                    Mode::Zoxide => Mode::Sessions,
+                };
+                Step::Redraw
+            }
+            Key::Enter => match self.selected().cloned() {
+                Some(it) => Step::Exit(Exit::Activate(it)),
+                None if !self.query.is_empty() => Step::Exit(Exit::NewSession(self.query.clone())),
+                None => Step::Exit(Exit::Cancel),
+            },
+            Key::New => {
+                self.prompt = Some(Prompt::New(self.query.clone()));
+                Step::Redraw
+            }
+            Key::Rename => match self.selected() {
+                Some(Item::Live(n)) | Some(Item::Snapshot(n)) => {
+                    self.prompt = Some(Prompt::Rename(n.clone()));
+                    Step::Redraw
+                }
+                _ => Step::Redraw,
+            },
+            Key::Delete => match self.selected().cloned() {
+                Some(it @ Item::Live(_)) => Step::Stay(Stay::Kill(it)),
+                _ => Step::Redraw,
+            },
+            Key::Cancel => Step::Exit(Exit::Cancel),
+        }
+    }
+
+    fn apply_prompt(&mut self, key: Key) -> Step {
+        let buf = match self.prompt.as_mut().unwrap() {
+            Prompt::New(b) | Prompt::Rename(b) => b,
+        };
+        match key {
+            Key::Char(c) => {
+                buf.push(c);
+                Step::Redraw
+            }
+            Key::Backspace => {
+                buf.pop();
+                Step::Redraw
+            }
+            Key::Cancel => {
+                self.prompt = None;
+                Step::Redraw
+            }
+            Key::Enter => {
+                let p = self.prompt.take().unwrap();
+                match p {
+                    Prompt::New(name) => Step::Exit(Exit::NewSession(name)),
+                    Prompt::Rename(to) => match self.selected().cloned() {
+                        Some(item) => Step::Stay(Stay::Rename { item, to }),
+                        None => Step::Redraw,
+                    },
+                }
+            }
+            _ => Step::Redraw,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +305,115 @@ mod tests {
     #[test]
     fn empty_query_matches_everything() {
         assert!(fuzzy_score("", "anything").is_some());
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+
+    fn st() -> State {
+        State::new(
+            vec![
+                Item::Live("KENP".into()),
+                Item::Live("dev".into()),
+                Item::Snapshot("old".into()),
+            ],
+            Mode::Sessions,
+        )
+    }
+
+    #[test]
+    fn typing_filters_and_resets_cursor() {
+        let mut s = st();
+        s.apply(Key::Char('d')); // matches "dev" and "old" (o-l-d)
+        assert!(matches!(s.apply(Key::Char('e')), Step::Redraw)); // "de" → only "dev"
+        assert_eq!(s.visible().len(), 1);
+        assert_eq!(item_key(s.selected().unwrap()), "dev");
+    }
+
+    #[test]
+    fn down_moves_selection_and_requests_preview() {
+        let mut s = st();
+        assert!(matches!(s.apply(Key::Down), Step::PreviewChanged));
+        assert_eq!(item_key(s.selected().unwrap()), "dev");
+    }
+
+    #[test]
+    fn enter_activates_selected() {
+        let mut s = st();
+        match s.apply(Key::Enter) {
+            Step::Exit(Exit::Activate(Item::Live(n))) => assert_eq!(n, "KENP"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancel_exits() {
+        let mut s = st();
+        assert!(matches!(s.apply(Key::Cancel), Step::Exit(Exit::Cancel)));
+    }
+
+    #[test]
+    fn tab_cycles_mode() {
+        let mut s = st();
+        s.apply(Key::Tab);
+        assert_eq!(s.mode(), Mode::Windows);
+        s.apply(Key::Tab);
+        assert_eq!(s.mode(), Mode::Zoxide);
+        s.apply(Key::Tab);
+        assert_eq!(s.mode(), Mode::Sessions);
+    }
+
+    #[test]
+    fn new_prompt_then_enter_creates_session() {
+        let mut s = st();
+        s.apply(Key::Char('w')); // query "w" → prefilled into the New prompt
+        s.apply(Key::New);
+        assert!(s.prompt().is_some());
+        s.apply(Key::Char('x'));
+        match s.apply(Key::Enter) {
+            Step::Exit(Exit::NewSession(name)) => assert_eq!(name, "wx"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn rename_prompt_prefills_name_and_yields_stay() {
+        let mut s = st();
+        s.apply(Key::Rename); // selected = KENP
+        assert_eq!(s.prompt().map(|(_, b)| b), Some("KENP"));
+        // clear + retype
+        for _ in 0..4 {
+            s.apply(Key::Backspace);
+        }
+        for c in "knp".chars() {
+            s.apply(Key::Char(c));
+        }
+        match s.apply(Key::Enter) {
+            Step::Stay(Stay::Rename { item: Item::Live(n), to }) => {
+                assert_eq!(n, "KENP");
+                assert_eq!(to, "knp");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_on_live_is_stay_kill() {
+        let mut s = st();
+        match s.apply(Key::Delete) {
+            Step::Stay(Stay::Kill(Item::Live(n))) => assert_eq!(n, "KENP"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn prompt_cancel_returns_to_list() {
+        let mut s = st();
+        s.apply(Key::New);
+        assert!(s.prompt().is_some());
+        assert!(matches!(s.apply(Key::Cancel), Step::Redraw));
+        assert!(s.prompt().is_none());
     }
 }
