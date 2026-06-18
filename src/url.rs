@@ -60,7 +60,32 @@ fn url_from_token(token: &str) -> Option<String> {
     if is_domain_path(cand) {
         return Some(format!("https://{cand}"));
     }
+    // 4. GitHub `owner/repo` shorthand (the tmux `@plugin` form).
+    if is_github_shorthand(cand) {
+        return Some(format!("https://github.com/{cand}"));
+    }
     None
+}
+
+/// `owner/repo` GitHub shorthand → github.com/owner/repo. One slash, ASCII slug
+/// segments, owner has no dot (domains go through `is_domain_path`), and it isn't
+/// an absolute/relative path. Non-ASCII (e.g. Turkish words) is rejected, so
+/// prose like `kaydet/yükle` is not mistaken for a repo.
+fn is_github_shorthand(s: &str) -> bool {
+    if s.starts_with(['/', '.', '~']) {
+        return false;
+    }
+    let Some((owner, repo)) = s.split_once('/') else {
+        return false;
+    };
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') || owner.contains('.') {
+        return false;
+    }
+    let slug = |seg: &str| {
+        seg.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    slug(owner) && slug(repo)
 }
 
 /// True for `host.tld/path`: a dotted host with an alphabetic TLD and a slash.
@@ -248,5 +273,30 @@ mod tests {
     #[test]
     fn other_schemes_kept_verbatim() {
         assert_eq!(extract_urls("get ftp://files.x.com/a now"), vec!["ftp://files.x.com/a"]);
+    }
+
+    #[test]
+    fn github_shorthand_owner_repo() {
+        assert_eq!(
+            extract_urls("set -g @plugin 'tmux-plugins/tpm'  # mgr"),
+            vec!["https://github.com/tmux-plugins/tpm"]
+        );
+        assert_eq!(
+            extract_urls("kenanpelit/tmux-anka and BurntSushi/ripgrep"),
+            vec![
+                "https://github.com/kenanpelit/tmux-anka".to_string(),
+                "https://github.com/BurntSushi/ripgrep".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn shorthand_skips_paths_and_prose() {
+        // absolute/relative paths are not repos
+        assert!(extract_urls("/etc/hosts ./src/main ~/foo/bar").is_empty());
+        // non-ASCII prose with a slash is not a repo
+        assert!(extract_urls("session kaydet/yükle").is_empty());
+        // a real domain shorthand still becomes a domain URL, not github
+        assert_eq!(extract_urls("github.com/foo"), vec!["https://github.com/foo"]);
     }
 }
