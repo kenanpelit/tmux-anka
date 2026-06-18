@@ -28,6 +28,8 @@ pub enum Cmd {
     },
     /// Re-launch a frozen blueprint
     Up { name: String },
+    /// Interactive session switcher (live + snapshot + zoxide)
+    Switch,
     /// Session management actions (sessionist-style)
     Session {
         #[command(subcommand)]

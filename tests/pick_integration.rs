@@ -10,7 +10,6 @@ fn pick_restores_the_chosen_session() {
         return;
     }
     let s = Server::start("pick");
-    // Sessions are stored name-sorted: "one" < "scratch" < "two", so #1 = "one".
     s.tmux(&["new-session", "-d", "-s", "one", "-x", "200", "-y", "50"]);
     s.tmux(&["new-session", "-d", "-s", "two", "-x", "200", "-y", "50"]);
     assert!(s.anka(&["save"]).status.success());
@@ -19,8 +18,8 @@ fn pick_restores_the_chosen_session() {
     s.tmux(&["kill-session", "-t", "two"]);
     assert!(!sessions(&s.socket).contains(&"one".to_string()));
 
-    // Choose entry #1 ("one"); the other listed session must NOT be restored.
-    let out = s.anka_stdin(&["pick"], "1\n");
+    // Pick "one" by name; the other listed session must NOT be restored.
+    let out = s.anka_stdin(&["pick"], "one\n");
     assert!(out.status.success(), "pick failed: {}", err(&out));
 
     let live = sessions(&s.socket);

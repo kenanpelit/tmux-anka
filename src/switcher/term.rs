@@ -77,8 +77,15 @@ impl Drop for RawMode {
 }
 
 fn stty(args: &[&str]) -> anyhow::Result<String> {
-    // stty needs the controlling tty on stdin; inherit it (popup pty).
-    let out = Command::new("stty").args(args).output()?;
+    use std::process::Stdio;
+    // stty configures the terminal on *its stdin*. `Command::output()` would
+    // default stdin to /dev/null, so it would silently fail to affect the real
+    // terminal — inherit our controlling tty (the popup pty) instead.
+    let out = Command::new("stty")
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 

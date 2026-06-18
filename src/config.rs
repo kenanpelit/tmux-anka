@@ -10,6 +10,8 @@ pub struct Config {
     pub save_interval_mins: u64,
     pub restore_on_start: bool,
     pub restore_overwrite: bool,
+    pub switch_preview: bool,
+    pub zoxide: bool,
 }
 
 fn opt_or(name: &str, default: &str) -> String {
@@ -44,6 +46,8 @@ impl Config {
             save_interval_mins: opt_or("@anka-save-interval", "10").parse().unwrap_or(10),
             restore_on_start: opt_bool("@anka-restore-on-start", true),
             restore_overwrite: opt_bool("@anka-restore-overwrite", false),
+            switch_preview: opt_bool("@anka-switch-preview", true),
+            zoxide: opt_bool("@anka-zoxide", true),
         }
     }
 }

@@ -227,6 +227,8 @@ mod tests {
             save_interval_mins: 0,
             restore_on_start: false,
             restore_overwrite: false,
+            switch_preview: false,
+            zoxide: false,
         }
     }
 
