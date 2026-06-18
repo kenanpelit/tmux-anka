@@ -43,9 +43,7 @@ fn run() -> Result<()> {
         Cmd::Switch => switcher::run(),
         Cmd::Url { pane, source } => url::run(pane.as_deref(), source.as_deref()),
         Cmd::Grab { pane, source } => grab::run(pane.as_deref(), source.as_deref()),
-        Cmd::Search { pane, source, cursor_y, pane_height } => {
-            search::run(pane.as_deref(), source.as_deref(), cursor_y, pane_height)
-        }
+        Cmd::Search { pane, source } => search::run(pane.as_deref(), source.as_deref()),
         Cmd::Clip { primary } => clip::run(primary),
         Cmd::Menu { run, client, session } => {
             menu::run(run, client.as_deref(), session.as_deref())
