@@ -80,20 +80,25 @@ fn copy_via(cmd: &str, args: &[&str], data: &[u8]) {
     }
 }
 
-pub fn run(primary: bool) -> Result<()> {
-    let mut data = Vec::new();
-    io::stdin().read_to_end(&mut data)?;
+/// Copy `data` to the clipboard, choosing the backend from the environment.
+pub(crate) fn copy(data: &[u8], primary: bool) {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     let x11 = std::env::var_os("DISPLAY").is_some();
     match backend(wayland, x11) {
-        Backend::Wayland => copy_via("wl-copy", &wl_args(primary), &data),
-        Backend::X11 => copy_via("xclip", &xclip_args(primary), &data),
+        Backend::Wayland => copy_via("wl-copy", &wl_args(primary), data),
+        Backend::X11 => copy_via("xclip", &xclip_args(primary), data),
         Backend::Osc52 => {
             if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-                let _ = tty.write_all(osc52(&data).as_bytes());
+                let _ = tty.write_all(osc52(data).as_bytes());
             }
         }
     }
+}
+
+pub fn run(primary: bool) -> Result<()> {
+    let mut data = Vec::new();
+    io::stdin().read_to_end(&mut data)?;
+    copy(&data, primary);
     Ok(())
 }
 

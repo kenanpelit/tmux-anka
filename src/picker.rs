@@ -15,10 +15,18 @@ const C_ACCENT: &str = "\x1b[38;5;75m";
 const FG: &str = "\x1b[39m";
 const R: &str = "\x1b[0m";
 
-/// Interactive pick; returns the chosen index into `items`, or `None` on cancel.
-pub fn pick(items: &[String], title: &str) -> Result<Option<usize>> {
+/// Outcome of an extended pick. `full` callers see Tab (cycle) and Ctrl accepts.
+#[derive(Debug, PartialEq)]
+pub enum Hit {
+    Enter(usize),
+    Ctrl(char, usize),
+    Tab,
+    Cancel,
+}
+
+fn run_picker(items: &[String], title: &str, full: bool) -> Result<Hit> {
     if items.is_empty() {
-        return Ok(None);
+        return Ok(Hit::Cancel);
     }
     let raw = RawMode::enter()?;
     let mut query = String::new();
@@ -41,15 +49,27 @@ pub fn pick(items: &[String], title: &str) -> Result<Option<usize>> {
             match key {
                 Key::Cancel => {
                     raw.restore();
-                    return Ok(None);
+                    return Ok(Hit::Cancel);
                 }
                 Key::Enter => {
-                    raw.restore();
-                    return Ok(filtered.get(cursor).copied());
+                    if let Some(&i) = filtered.get(cursor) {
+                        raw.restore();
+                        return Ok(Hit::Enter(i));
+                    }
                 }
                 Key::Digit(d) if d >= 1 && d - 1 < filtered.len() => {
                     raw.restore();
-                    return Ok(Some(filtered[d - 1]));
+                    return Ok(Hit::Enter(filtered[d - 1]));
+                }
+                Key::Tab if full => {
+                    raw.restore();
+                    return Ok(Hit::Tab);
+                }
+                Key::Ctrl(c) if full => {
+                    if let Some(&i) = filtered.get(cursor) {
+                        raw.restore();
+                        return Ok(Hit::Ctrl(c, i));
+                    }
                 }
                 Key::Up => cursor = cursor.saturating_sub(1),
                 Key::Down if cursor + 1 < filtered.len() => cursor += 1,
@@ -69,7 +89,20 @@ pub fn pick(items: &[String], title: &str) -> Result<Option<usize>> {
         }
     }
     raw.restore();
-    Ok(None)
+    Ok(Hit::Cancel)
+}
+
+/// Interactive pick; returns the chosen index into `items`, or `None` on cancel.
+pub fn pick(items: &[String], title: &str) -> Result<Option<usize>> {
+    match run_picker(items, title, false)? {
+        Hit::Enter(i) => Ok(Some(i)),
+        _ => Ok(None),
+    }
+}
+
+/// Like `pick`, but also surfaces Tab (cycle) and Ctrl-key accepts.
+pub fn pick_ex(items: &[String], title: &str) -> Result<Hit> {
+    run_picker(items, title, true)
 }
 
 /// Convenience: return the chosen item itself.

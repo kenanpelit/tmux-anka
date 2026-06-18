@@ -38,6 +38,22 @@ pub enum Cmd {
         /// File with pane text to pick from (default: stdin) — used inside the popup
         source: Option<String>,
     },
+    /// Extract tokens from the pane → copy/paste/open (extrakto-style)
+    Grab {
+        /// Capture this pane id, then open the picker in a popup (for keybindings)
+        #[arg(long)]
+        pane: Option<String>,
+        /// File with captured pane text — used inside the popup
+        source: Option<String>,
+    },
+    /// Fuzzy-search the scrollback → jump to the line (fuzzback-style)
+    Search {
+        /// Capture this pane id, then open the picker in a popup (for keybindings)
+        #[arg(long)]
+        pane: Option<String>,
+        /// File with captured scrollback — used inside the popup
+        source: Option<String>,
+    },
     /// Copy stdin to the system clipboard (wayland/X/OSC52). For copy-pipe.
     Clip {
         /// Use the primary selection instead of the clipboard

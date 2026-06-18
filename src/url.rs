@@ -171,7 +171,7 @@ fn browser_cmd() -> String {
     std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".into())
 }
 
-fn open(url: &str) {
+pub(crate) fn open(url: &str) {
     let browser = browser_cmd();
     // Detach (setsid -f) so the browser outlives the closing popup; *wait* for
     // setsid to return so it has reparented the browser into its own session

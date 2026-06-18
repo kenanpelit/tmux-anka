@@ -38,6 +38,7 @@ pub fn parse_key(buf: &[u8]) -> Option<(Option<Key>, usize)> {
             Some((Some(Key::Cancel), 2)) // ESC + other → treat as cancel
         }
         b'1'..=b'9' => Some((Some(Key::Digit((b0 - b'0') as usize)), 1)),
+        0x01..=0x1a => Some((Some(Key::Ctrl((b0 + 0x60) as char)), 1)),
         0x20..=0x7e => Some((Some(Key::Char(b0 as char)), 1)),
         0x80.. => {
             // UTF-8 multibyte: decode just the first char.
@@ -142,7 +143,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_control_is_consumed_without_a_key() {
-        assert!(matches!(parse_key(&[0x07]), Some((None, 1)))); // bell
+    fn ctrl_letters_map_to_ctrl_variant() {
+        assert_eq!(parse_key(&[0x16]), Some((Some(Key::Ctrl('v')), 1))); // ^V
+        assert_eq!(parse_key(&[0x0f]), Some((Some(Key::Ctrl('o')), 1))); // ^O
+        assert_eq!(parse_key(&[0x07]), Some((Some(Key::Ctrl('g')), 1))); // ^G (was bell)
+        // specific control bindings still win (matched before the Ctrl range):
+        assert_eq!(parse_key(&[0x12]), Some((Some(Key::Rename), 1))); // ^R
+        assert_eq!(parse_key(&[0x10]), Some((Some(Key::Up), 1))); // ^P
     }
 }

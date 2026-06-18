@@ -4,11 +4,13 @@ mod clip;
 mod config;
 mod daemon;
 mod freeze;
+mod grab;
 mod menu;
 mod model;
 mod picker;
 mod process;
 mod restore;
+mod search;
 mod session;
 mod status;
 mod store;
@@ -40,6 +42,8 @@ fn run() -> Result<()> {
         Cmd::Up { name } => freeze::up(&name),
         Cmd::Switch => switcher::run(),
         Cmd::Url { pane, source } => url::run(pane.as_deref(), source.as_deref()),
+        Cmd::Grab { pane, source } => grab::run(pane.as_deref(), source.as_deref()),
+        Cmd::Search { pane, source } => search::run(pane.as_deref(), source.as_deref()),
         Cmd::Clip { primary } => clip::run(primary),
         Cmd::Menu { run, client, session } => {
             menu::run(run, client.as_deref(), session.as_deref())

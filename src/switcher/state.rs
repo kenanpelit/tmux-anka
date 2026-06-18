@@ -99,6 +99,7 @@ pub enum Key {
     Digit(usize), // 1-9: jump straight to (and activate) that row
     Rename,
     Delete,
+    Ctrl(char),
     Cancel,
 }
 
@@ -256,6 +257,7 @@ impl State {
                 Some(it @ Item::Live(_)) => Step::Stay(Stay::Kill(it)),
                 _ => Step::Redraw,
             },
+            Key::Ctrl(_) => Step::Redraw,
             Key::Cancel => Step::Exit(Exit::Cancel),
         }
     }
