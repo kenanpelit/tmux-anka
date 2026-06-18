@@ -119,6 +119,21 @@ impl Server {
         self.anka_command(args).output().expect("spawn anka")
     }
 
+    /// The active pane id of a session (its active window).
+    pub fn pane_of(&self, session: &str) -> String {
+        tmux(&self.socket, &["display-message", "-p", "-t", session, "#{pane_id}"])
+    }
+
+    /// Run anka as if invoked from `session` (sets `TMUX_PANE`, like a tmux
+    /// run-shell/popup binding would).
+    pub fn anka_in(&self, session: &str, args: &[&str]) -> Output {
+        let pane = self.pane_of(session);
+        self.anka_command(args)
+            .env("TMUX_PANE", pane)
+            .output()
+            .expect("spawn anka")
+    }
+
     /// Run anka feeding `input` to its stdin (for the interactive picker).
     pub fn anka_stdin(&self, args: &[&str], input: &str) -> Output {
         use std::io::Write;

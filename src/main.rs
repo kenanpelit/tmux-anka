@@ -6,6 +6,7 @@ mod freeze;
 mod model;
 mod process;
 mod restore;
+mod session;
 mod status;
 mod store;
 mod tmux;
@@ -33,6 +34,7 @@ fn run() -> Result<()> {
         Cmd::Pick => tui::pick(),
         Cmd::Freeze { name, script } => freeze::freeze(name.as_deref(), script),
         Cmd::Up { name } => freeze::up(&name),
+        Cmd::Session { action } => session::run(action),
         Cmd::Status => status::print(),
         Cmd::Daemon => daemon::run(),
         Cmd::Hook { event } => daemon::hook(&event),

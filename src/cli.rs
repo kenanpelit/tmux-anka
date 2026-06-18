@@ -28,6 +28,11 @@ pub enum Cmd {
     },
     /// Re-launch a frozen blueprint
     Up { name: String },
+    /// Session management actions (sessionist-style)
+    Session {
+        #[command(subcommand)]
+        action: SessionCmd,
+    },
     /// Print the status-bar widget text
     Status,
     /// Run the interval auto-save daemon
@@ -38,4 +43,20 @@ pub enum Cmd {
     /// Internal: restore-on-start guard
     #[command(hide = true)]
     Autostart,
+}
+
+#[derive(Subcommand)]
+pub enum SessionCmd {
+    /// Create or switch to a named session
+    New { name: String },
+    /// Kill the current session, switching away first
+    Kill,
+    /// Move the current pane into a new session
+    Promote { name: String },
+    /// Switch to a session by name
+    Switch { name: String },
+    /// Switch to the last session
+    Last,
+    /// Rename the current session
+    Rename { name: String },
 }
