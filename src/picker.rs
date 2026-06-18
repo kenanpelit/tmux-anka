@@ -24,9 +24,10 @@ pub enum Hit {
     Cancel,
 }
 
-fn run_picker(items: &[String], title: &str, full: bool) -> Result<Hit> {
+/// Returns the outcome plus the final query string the user typed.
+fn run_picker(items: &[String], title: &str, full: bool) -> Result<(Hit, String)> {
     if items.is_empty() {
-        return Ok(Hit::Cancel);
+        return Ok((Hit::Cancel, String::new()));
     }
     let raw = RawMode::enter()?;
     let mut query = String::new();
@@ -49,26 +50,26 @@ fn run_picker(items: &[String], title: &str, full: bool) -> Result<Hit> {
             match key {
                 Key::Cancel => {
                     raw.restore();
-                    return Ok(Hit::Cancel);
+                    return Ok((Hit::Cancel, query));
                 }
                 Key::Enter => {
                     if let Some(&i) = filtered.get(cursor) {
                         raw.restore();
-                        return Ok(Hit::Enter(i));
+                        return Ok((Hit::Enter(i), query));
                     }
                 }
                 Key::Digit(d) if d >= 1 && d - 1 < filtered.len() => {
                     raw.restore();
-                    return Ok(Hit::Enter(filtered[d - 1]));
+                    return Ok((Hit::Enter(filtered[d - 1]), query));
                 }
                 Key::Tab if full => {
                     raw.restore();
-                    return Ok(Hit::Tab);
+                    return Ok((Hit::Tab, query));
                 }
                 Key::Ctrl(c) if full => {
                     if let Some(&i) = filtered.get(cursor) {
                         raw.restore();
-                        return Ok(Hit::Ctrl(c, i));
+                        return Ok((Hit::Ctrl(c, i), query));
                     }
                 }
                 Key::Up => cursor = cursor.saturating_sub(1),
@@ -89,20 +90,29 @@ fn run_picker(items: &[String], title: &str, full: bool) -> Result<Hit> {
         }
     }
     raw.restore();
-    Ok(Hit::Cancel)
+    Ok((Hit::Cancel, query))
 }
 
 /// Interactive pick; returns the chosen index into `items`, or `None` on cancel.
 pub fn pick(items: &[String], title: &str) -> Result<Option<usize>> {
-    match run_picker(items, title, false)? {
+    match run_picker(items, title, false)?.0 {
         Hit::Enter(i) => Ok(Some(i)),
         _ => Ok(None),
     }
 }
 
+/// Like `pick`, but returns the chosen index together with the typed query.
+pub fn pick_q(items: &[String], title: &str) -> Result<Option<(usize, String)>> {
+    let (hit, query) = run_picker(items, title, false)?;
+    Ok(match hit {
+        Hit::Enter(i) => Some((i, query)),
+        _ => None,
+    })
+}
+
 /// Like `pick`, but also surfaces Tab (cycle) and Ctrl-key accepts.
 pub fn pick_ex(items: &[String], title: &str) -> Result<Hit> {
-    run_picker(items, title, true)
+    Ok(run_picker(items, title, true)?.0)
 }
 
 /// Convenience: return the chosen item itself.

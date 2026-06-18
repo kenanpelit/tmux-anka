@@ -53,6 +53,12 @@ pub enum Cmd {
         pane: Option<String>,
         /// File with captured scrollback — used inside the popup
         source: Option<String>,
+        /// Start cursor row (captured before copy-mode) — used inside the popup
+        #[arg(long)]
+        cursor_y: Option<usize>,
+        /// Pane height — used inside the popup
+        #[arg(long)]
+        pane_height: Option<usize>,
     },
     /// Copy stdin to the system clipboard (wayland/X/OSC52). For copy-pipe.
     Clip {
