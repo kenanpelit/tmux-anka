@@ -31,8 +31,8 @@ a restart — automatically.
   strategy), otherwise reopens the same files.
 - **Freeze to blueprint** — turn a snapshot into a re-runnable declarative spec
   (`anka up <name>`) or an exportable standalone shell script.
-- **Built-in session manager** — an interactive switcher (`prefix + s`) over
-  live + snapshot + zoxide sessions with a live preview and inline
+- **Built-in session manager** — an interactive switcher (`prefix + o`) over
+  live + snapshot + zoxide sessions with numbered jump, fuzzy filter, and inline
   new/rename/kill, plus sessionist-style quick actions (new/kill/promote/switch/
   last). Replaces `tmux-sessionx` + `tmux-sessionist`; no external session
   manager or fuzzy-finder needed.
