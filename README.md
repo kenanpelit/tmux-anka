@@ -32,7 +32,8 @@ a restart — automatically.
 - **Freeze to blueprint** — turn a snapshot into a re-runnable declarative spec
   (`anka up <name>`) or an exportable standalone shell script.
 - **Built-in session manager** — an interactive switcher (`prefix + o`) over
-  live + snapshot + zoxide sessions with numbered jump, fuzzy filter, and inline
+  live + snapshot + zoxide sessions, with a bordered two-pane layout, a live
+  colour preview, numbered jump, fuzzy filter, and inline
   new/rename/kill, plus sessionist-style quick actions (new/kill/promote/switch/
   last). Replaces `tmux-sessionx` + `tmux-sessionist`; no external session
   manager or fuzzy-finder needed.
@@ -95,21 +96,25 @@ anka restore work       # bring "work" back (never clobbers a live session)
 anka rm work
 ```
 
-**Switch sessions** (`prefix + o`) — an interactive popup over your live
-sessions *and* the offline ones in your last snapshot (and, with `zoxide`,
-frecent dirs). Rows are numbered: press `1`-`9` to jump straight to one. Type to
-fuzzy-filter, move with `↑`/`↓` or `^p`/`^n`, and `Tab` cycles
-sessions/windows/zoxide:
+**Switch sessions** (`prefix + o`) — a bordered popup over your live sessions
+*and* the offline ones in your last snapshot (and, with `zoxide`, frecent dirs),
+with a live colour preview of the highlighted target. Rows are numbered: press
+`1`-`9` to jump straight to one. Type to fuzzy-filter, move with `↑`/`↓` or
+`^p`/`^n`, and `Tab` cycles sessions/windows/zoxide:
 
 ```
- anka switch · sessions · 4 items
- 1 KENP    (live)
- 2 dev     (live)
- 3 media   (live)
- 4 Tor     (snapshot)
- > dev▌
- ↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · Tab mode · esc
+╭─ anka · sessions ──────────╮╭─ preview: dev ───────────────╮
+│▌ 1 KENP        live · 3w 5p││ ~/dev/anka                    │
+│  2 dev         live · 2w 3p││ $ cargo test                  │
+│  3 media       live · 2w 2p││ test result: ok. 19 passed    │
+│  4 Tor         snapshot ·2w││ $ ▮                           │
+│ › dev▌                     ││                               │
+╰────────────────────────────╯╰───────────────────────────────╯
+ ↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · ⇥ mode · esc
 ```
+
+The preview is colour (it shows each pane's own output); turn it off with
+`@anka-switch-preview off` for a plain bordered list.
 
 `⏎` switches to a live session, restores a snapshot one, jumps to a window, or
 opens a zoxide dir as a new session. Type a name that matches nothing and `⏎` to

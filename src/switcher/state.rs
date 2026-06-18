@@ -19,6 +19,16 @@ pub fn item_label(i: &Item) -> String {
     }
 }
 
+/// The display name without the trailing live/snapshot tag (the switcher draws
+/// that tag itself, coloured).
+pub fn item_name(i: &Item) -> String {
+    match i {
+        Item::Live(n) | Item::Snapshot(n) => n.clone(),
+        Item::Window { session, index, name } => format!("{session}:{index} {name}"),
+        Item::Zoxide(p) => p.display().to_string(),
+    }
+}
+
 /// The string a query is fuzzy-matched against.
 pub fn item_key(i: &Item) -> String {
     match i {

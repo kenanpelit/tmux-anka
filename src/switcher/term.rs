@@ -104,10 +104,6 @@ pub fn term_size() -> (u16, u16) {
     (80, 24)
 }
 
-pub fn clear() -> &'static str {
-    "\x1b[2J\x1b[H"
-}
-
 pub fn move_to(row: u16, col: u16) -> String {
     format!("\x1b[{row};{col}H")
 }
