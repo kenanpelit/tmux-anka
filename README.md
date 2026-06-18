@@ -118,7 +118,8 @@ The preview is colour (it shows each pane's own output); turn it off with
 
 **Open a URL from the screen** — `anka url` extracts http(s) URLs from pane text
 (trailing punctuation trimmed, de-duplicated), shows them in the same bordered
-picker, and opens the chosen one in `$BROWSER`. No fzf/extra tools. Bind it:
+picker, and opens the chosen one in your browser — `@anka-url-browser` if set,
+else `$BROWSER`, else `xdg-open`. No fzf/extra tools. Bind it:
 
 ```tmux
 bind u run-shell -b "tmux capture-pane -p -J -t '#{pane_id}' -S -3000 > /tmp/anka-url.txt; tmux display-popup -E '~/.tmux/plugins/tmux-anka/bin/anka url /tmp/anka-url.txt'"
@@ -171,6 +172,7 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-switch-key` | `o` | Open the switcher (leaves `prefix + s` = choose-tree) |
 | `@anka-new-key` / `@anka-kill-key` / `@anka-promote-key` | `C` / `X` / `@` | Session new/kill/promote |
 | `@anka-switch-name-key` / `@anka-last-key` | `g` / `S` | Switch by name / last session |
+| `@anka-url-browser` | _(unset → `$BROWSER` → `xdg-open`)_ | Command `anka url` opens the chosen URL with |
 
 Set any `@anka-*-key` to `none` to skip that binding and keep your own.
 

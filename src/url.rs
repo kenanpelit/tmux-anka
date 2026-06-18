@@ -61,8 +61,17 @@ pub fn run(source: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// The URL opener: `@anka-url-browser` (tmux option) → `$BROWSER` → `xdg-open`.
+fn browser_cmd() -> String {
+    let opt = crate::tmux::global_option("@anka-url-browser");
+    if !opt.is_empty() {
+        return opt;
+    }
+    std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".into())
+}
+
 fn open(url: &str) {
-    let browser = std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".into());
+    let browser = browser_cmd();
     // Detach (setsid -f) so the browser outlives the closing popup; *wait* for
     // setsid to return so it has reparented the browser into its own session
     // before we exit (otherwise the popup teardown can SIGHUP it).
