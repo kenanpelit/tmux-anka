@@ -45,6 +45,15 @@ fn restore_preserves_pane_cwd() {
     let s = Server::start("cwd");
     s.tmux(&["new-session", "-d", "-s", "work", "-c", "/tmp", "-x", "200", "-y", "50"]);
 
+    // The shell's rc can transiently report the server's cwd before settling
+    // into the `-c` dir; wait for it to settle so we save a realistic state.
+    for _ in 0..40 {
+        if s.tmux(&["display-message", "-p", "-t", "work", "#{pane_current_path}"]) == "/tmp" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
     let out = s.anka(&["save", "snap"]);
     assert!(out.status.success(), "save failed: {}", err(&out));
 

@@ -5,16 +5,14 @@ use std::fs;
 const SHELLS: &[&str] = &["bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"];
 
 /// Best-effort foreground command line for a pane, given the pane's pid.
-/// Descends to the youngest non-shell descendant. Returns `None` for shells.
+///
+/// Returns the pane shell's direct child — the program the user actually ran
+/// (nvim, ssh, npm, …) — **not** any deeper descendant that program spawned
+/// (an editor's LSP server, a tool's worker, …). Returns `None` for a bare
+/// shell.
 pub fn foreground_command(pane_pid: i32) -> Option<String> {
-    let mut pid = pane_pid;
-    for _ in 0..16 {
-        match newest_child(pid) {
-            Some(child) => pid = child,
-            None => break,
-        }
-    }
-    let cmd = cmdline(pid)?;
+    let child = newest_child(pane_pid)?;
+    let cmd = cmdline(child)?;
     if SHELLS.contains(&base_name(&cmd)) {
         None
     } else {
@@ -49,5 +47,40 @@ fn cmdline(pid: i32) -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::Duration;
+
+    // shell -> python3 (the foreground program) -> sleep (a grandchild).
+    // We must capture the program the user ran (python3), not a descendant it
+    // happened to spawn (sleep) — the bug that captured an editor's LSP server.
+    #[test]
+    fn captures_foreground_program_not_its_grandchild() {
+        let prog = "import subprocess,time; subprocess.Popen(['sleep','3']); time.sleep(3)";
+        let mut shell = Command::new("sh")
+            .arg("-c")
+            // trailing `; true` stops sh from exec-replacing itself with python3
+            .arg(format!("python3 -c \"{prog}\"; true"))
+            .spawn()
+            .expect("spawn sh");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let got = foreground_command(shell.id() as i32);
+        let _ = shell.kill();
+        let _ = shell.wait();
+
+        // The bug returned the bare grandchild ("sleep 3"); the fix returns the
+        // program ("python3 -c ..."). (The python source mentions "sleep", so
+        // assert on the leading program name rather than absence of "sleep".)
+        let got = got.unwrap_or_default();
+        assert!(
+            got.starts_with("python3"),
+            "expected the foreground program (python3 …), got: {got:?}"
+        );
     }
 }
