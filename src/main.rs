@@ -11,6 +11,7 @@ mod status;
 mod store;
 mod switcher;
 mod tmux;
+mod url;
 
 use anyhow::Result;
 use clap::Parser;
@@ -35,6 +36,7 @@ fn run() -> Result<()> {
         Cmd::Freeze { name, script } => freeze::freeze(name.as_deref(), script),
         Cmd::Up { name } => freeze::up(&name),
         Cmd::Switch => switcher::run(),
+        Cmd::Url { source } => url::run(source.as_deref()),
         Cmd::Session { action } => session::run(action),
         Cmd::Status => status::print(),
         Cmd::Daemon => daemon::run(),

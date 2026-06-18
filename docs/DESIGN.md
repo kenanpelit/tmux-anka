@@ -209,5 +209,9 @@ See the table in `README.md`. All options read via `tmux show-options -gqv`.
 - **v0.8.0** ✅ — native session management: interactive switcher (live +
   snapshot + windows + zoxide, fuzzy + preview, inline new/rename/kill) and
   `anka session` quick actions. Replaces tmux-sessionx + tmux-sessionist.
+- **v0.9.0** ✅ — `anka url`: extract URLs from pane text (no regex crate,
+  trailing punctuation trimmed, de-duped) and open the chosen one in `$BROWSER`
+  via the same bordered picker (reuses `switcher::term`). Replaces a
+  capture|fzf|xargs URL pipeline.
 - **v1.0.0** (next) — nvim `:mksession` capture via an editor-side hook;
   pane-contents restore; expanded docs.

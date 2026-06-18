@@ -116,6 +116,14 @@ with a live colour preview of the highlighted target. Rows are numbered: press
 The preview is colour (it shows each pane's own output); turn it off with
 `@anka-switch-preview off` for a plain bordered list.
 
+**Open a URL from the screen** — `anka url` extracts http(s) URLs from pane text
+(trailing punctuation trimmed, de-duplicated), shows them in the same bordered
+picker, and opens the chosen one in `$BROWSER`. No fzf/extra tools. Bind it:
+
+```tmux
+bind u run-shell -b "tmux capture-pane -p -J -t '#{pane_id}' -S -3000 > /tmp/anka-url.txt; tmux display-popup -E '~/.tmux/plugins/tmux-anka/bin/anka url /tmp/anka-url.txt'"
+```
+
 `⏎` switches to a live session, restores a snapshot one, jumps to a window, or
 opens a zoxide dir as a new session. Type a name that matches nothing and `⏎` to
 create it; `^r` renames the selected session, `^x` kills it. A preview pane
@@ -175,6 +183,7 @@ anka list               List saved snapshots
 anka rm <name>          Remove a snapshot
 anka pick               Open the session switcher (alias of `switch`)
 anka switch             Interactive session switcher (live + snapshot + zoxide)
+anka url [file]         Pick a URL from pane text (or stdin) and open in $BROWSER
 anka session new <name>     Create / switch to a named session
 anka session kill           Kill the current session, switching away first
 anka session promote <name> Move the current pane into a new session

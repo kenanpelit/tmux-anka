@@ -30,6 +30,11 @@ pub enum Cmd {
     Up { name: String },
     /// Interactive session switcher (live + snapshot + zoxide)
     Switch,
+    /// Pick a URL from captured pane text and open it in $BROWSER
+    Url {
+        /// File with the pane text (default: stdin)
+        source: Option<String>,
+    },
     /// Session management actions (sessionist-style)
     Session {
         #[command(subcommand)]
