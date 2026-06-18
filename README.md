@@ -22,7 +22,7 @@ a restart — automatically.
 - **Auto-restore on start** — your last snapshot comes back when the tmux server
   starts.
 - **Named snapshots** — `anka save work`, `anka restore work`, `anka list`.
-- **Lazy / per-session restore** — built-in TUI picker (`prefix + C-p`) restores
+- **Lazy / per-session restore** — built-in TUI picker (`prefix + P`) restores
   just the session you choose, saving memory.
 - **Program restore** — relaunches allow-listed programs by opening the pane
   *with* the command (not by typing into a shell).
@@ -48,7 +48,7 @@ plugin directory — nothing is written to your `PATH`.
 |-----|--------|
 | `prefix + C-s` | Save snapshot |
 | `prefix + C-r` | Restore last snapshot |
-| `prefix + C-p` | Pick a session to restore (TUI) |
+| `prefix + P` | Pick a session to restore (TUI) |
 
 ## Status widget
 
@@ -69,7 +69,7 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-save-interval` | `10` | Interval daemon period in minutes (`0` disables) |
 | `@anka-restore-on-start` | `on` | Auto-restore last snapshot on server start |
 | `@anka-restore-overwrite` | `off` | Overwrite existing sessions on restore |
-| `@anka-save-key` / `@anka-restore-key` / `@anka-pick-key` | `C-s` / `C-r` / `C-p` | Keybindings |
+| `@anka-save-key` / `@anka-restore-key` / `@anka-pick-key` | `C-s` / `C-r` / `P` | Keybindings |
 
 ## CLI
 

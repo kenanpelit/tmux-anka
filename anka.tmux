@@ -41,7 +41,7 @@ opt() { tmux show-options -gqv "$1"; }
 
 SAVE_KEY="$(opt @anka-save-key)";       SAVE_KEY="${SAVE_KEY:-C-s}"
 RESTORE_KEY="$(opt @anka-restore-key)"; RESTORE_KEY="${RESTORE_KEY:-C-r}"
-PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-C-p}"
+PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-P}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
 tmux bind-key "$SAVE_KEY"    run-shell "$BINARY save"
