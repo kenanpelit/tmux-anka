@@ -157,6 +157,8 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-new-key` / `@anka-kill-key` / `@anka-promote-key` | `C` / `X` / `@` | Session new/kill/promote |
 | `@anka-switch-name-key` / `@anka-last-key` | `g` / `S` | Switch by name / last session |
 
+Set any `@anka-*-key` to `none` to skip that binding and keep your own.
+
 ## CLI
 
 ```

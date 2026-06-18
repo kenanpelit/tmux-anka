@@ -50,24 +50,27 @@ SWITCH_NAME_KEY="$(opt @anka-switch-name-key)"; SWITCH_NAME_KEY="${SWITCH_NAME_K
 LAST_KEY="$(opt @anka-last-key)";               LAST_KEY="${LAST_KEY:-S}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
+# Set any @anka-*-key to 'none' to skip that binding (keep your own).
+bind_anka() { [ "$1" = none ] && return 0; tmux bind-key "$@"; }
+
 # Save/restore arka planda çalışır (run-shell -b). run-shell, komutun stdout'unu
 # Enter/q ile kapatılması gereken bir view'da gösterir; bu yüzden anka'nın stdout'unu
 # (>/dev/null) susturup sonucu kısa bir display-message ile mesaj satırında gösteriyoruz
 # (anka ayrıca @anka_status widget'ını da günceller). stderr açık kalır ki gerçek
 # hatalar yine görünebilsin.
-tmux bind-key "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
-tmux bind-key "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
-tmux bind-key "$PICK_KEY"    display-popup -E "$BINARY pick"
+bind_anka "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
+bind_anka "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
+bind_anka "$PICK_KEY"    display-popup -E "$BINARY pick"
 
 # ── Session management (replaces tmux-sessionx + tmux-sessionist) ─────────────
 # Switcher: an interactive popup over live + snapshot + zoxide sessions.
-tmux bind-key "$SWITCH_KEY"      display-popup -E "$BINARY switch"
+bind_anka "$SWITCH_KEY"      display-popup -E "$BINARY switch"
 # Sessionist-style quick actions. command-prompt feeds the name as %%.
-tmux bind-key "$NEW_KEY"         command-prompt -p "New session:" "run-shell \"$BINARY session new '%%'\""
-tmux bind-key "$KILL_KEY"        run-shell "$BINARY session kill"
-tmux bind-key "$PROMOTE_KEY"     command-prompt -p "Promote pane to session:" "run-shell \"$BINARY session promote '%%'\""
-tmux bind-key "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \"$BINARY session switch '%%'\""
-tmux bind-key "$LAST_KEY"        run-shell "$BINARY session last"
+bind_anka "$NEW_KEY"         command-prompt -p "New session:" "run-shell \"$BINARY session new '%%'\""
+bind_anka "$KILL_KEY"        run-shell "$BINARY session kill"
+bind_anka "$PROMOTE_KEY"     command-prompt -p "Promote pane to session:" "run-shell \"$BINARY session promote '%%'\""
+bind_anka "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \"$BINARY session switch '%%'\""
+bind_anka "$LAST_KEY"        run-shell "$BINARY session last"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
 tmux set-hook -g session-closed   "run-shell \"$BINARY hook session-closed >/dev/null\""
