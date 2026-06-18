@@ -9,6 +9,9 @@ mod restore;
 mod session;
 mod status;
 mod store;
+// Wired into the CLI in the switcher's final task; silence until then.
+#[allow(dead_code, unused_imports)]
+mod switcher;
 mod tmux;
 mod tui;
 
