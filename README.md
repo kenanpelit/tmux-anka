@@ -32,6 +32,13 @@ a restart — automatically.
 - **Freeze to blueprint** — turn a snapshot into a re-runnable declarative spec
   (`anka up <name>`) or an exportable standalone shell script.
 
+## Requirements
+
+- **Linux** — process resolution reads `/proc` (no macOS/BSD support).
+- **tmux 3.x+** and a working `tmux` on `PATH`.
+- Nothing else at runtime: `anka` is a single static binary. Building from
+  source needs a Rust toolchain; installing a release does not.
+
 ## Install (TPM)
 
 Add to your `tmux.conf`:
@@ -40,9 +47,19 @@ Add to your `tmux.conf`:
 set -g @plugin 'kenanpelit/tmux-anka'
 ```
 
-Then hit `prefix + I`. On first load the plugin fetches a prebuilt binary for
-your platform (or compiles it with `cargo` if Rust is available) into the
-plugin directory — nothing is written to your `PATH`.
+Then hit `prefix + I`. On first load the plugin resolves the binary **inside the
+plugin directory** (never touching your `PATH`): it downloads the prebuilt
+release asset for your architecture (`x86_64` / `aarch64`), or compiles it with
+`cargo` if no asset matches and Rust is available.
+
+### Manual install
+
+```sh
+git clone https://github.com/kenanpelit/tmux-anka \
+    ~/.tmux/plugins/tmux-anka
+~/.tmux/plugins/tmux-anka/scripts/install-binary.sh   # fetch or build the binary
+# then `run ~/.tmux/plugins/tmux-anka/anka.tmux` from your tmux.conf
+```
 
 ## Keybindings
 
@@ -51,6 +68,48 @@ plugin directory — nothing is written to your `PATH`.
 | `prefix + C-s` | Save snapshot |
 | `prefix + C-r` | Restore last snapshot |
 | `prefix + P` | Pick a session to restore |
+
+## Usage
+
+Day to day you do nothing: anka auto-saves on session/window close and detach,
+optionally on an interval, and auto-restores your `last` snapshot when the tmux
+server starts. The rest is on demand.
+
+**Named snapshots** — keep curated layouts alongside the rolling `last` one:
+
+```sh
+anka save work          # snapshot the current environment as "work"
+anka list               # default (last), work
+anka restore work       # bring "work" back (never clobbers a live session)
+anka rm work
+```
+
+**Pick one session** (`prefix + P`) — restore just what you need instead of
+everything. A numbered menu opens in a popup:
+
+```
+anka — restore a session from snapshot 'default':
+
+   1)  KENP                     3 win · 5 panes  (live)
+   2)  Tor                      1 win · 2 panes
+   3)  media                    2 win · 3 panes
+
+select [1-3], or q to cancel:
+```
+
+**Freeze a layout to a re-runnable blueprint** — a hand-editable template you can
+relaunch anywhere, independent of the rolling snapshots:
+
+```sh
+anka freeze work            # → <anka-dir>/blueprints/work.json (edit by hand)
+anka up work                # recreate the layout from the blueprint
+anka freeze work --script   # also export blueprints/work.sh (raw tmux, no anka)
+```
+
+Programs are relaunched into the pane (so it survives if the command exits), with
+their arguments preserved — including repairing the `--` separator that
+`npm exec`/`npx` drop from their process title, so `npm exec pkg -r --flag` comes
+back with `-r --flag` intact.
 
 ## Status widget
 
