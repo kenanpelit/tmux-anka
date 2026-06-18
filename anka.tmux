@@ -44,13 +44,18 @@ RESTORE_KEY="$(opt @anka-restore-key)"; RESTORE_KEY="${RESTORE_KEY:-C-r}"
 PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-P}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
-tmux bind-key "$SAVE_KEY"    run-shell "$BINARY save"
-tmux bind-key "$RESTORE_KEY" run-shell "$BINARY restore"
+# Save/restore arka planda çalışır (run-shell -b). run-shell, komutun stdout'unu
+# Enter/q ile kapatılması gereken bir view'da gösterir; bu yüzden anka'nın stdout'unu
+# (>/dev/null) susturup sonucu kısa bir display-message ile mesaj satırında gösteriyoruz
+# (anka ayrıca @anka_status widget'ını da günceller). stderr açık kalır ki gerçek
+# hatalar yine görünebilsin.
+tmux bind-key "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
+tmux bind-key "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
 tmux bind-key "$PICK_KEY"    display-popup -E "$BINARY pick"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
-tmux set-hook -g session-closed   "run-shell \"$BINARY hook session-closed\""
-tmux set-hook -g client-detached  "run-shell \"$BINARY hook client-detached\""
+tmux set-hook -g session-closed   "run-shell \"$BINARY hook session-closed >/dev/null\""
+tmux set-hook -g client-detached  "run-shell \"$BINARY hook client-detached >/dev/null\""
 
 # ── Optional interval daemon ─────────────────────────────────────────────────
 INTERVAL="$(opt @anka-save-interval)"; INTERVAL="${INTERVAL:-10}"
