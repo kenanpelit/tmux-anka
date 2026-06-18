@@ -92,7 +92,10 @@ restore is deterministic.
   separated by US (`\x1f`) to avoid the tab/newline injection bugs that affect
   resurrect's TSV parsing.
 - Per-pane foreground command resolved from `/proc/<pane_pid>` (walk children,
-  skip shells) — drives `restore.kind`/`command`.
+  skip shells) — drives `restore.kind`/`command`. argv is shell-quoted so it
+  re-parses identically; a `setproctitle` single-string command (npm/node) is
+  emitted verbatim but its `npm exec`/`npx` form has the dropped `--` separator
+  re-inserted, so the package's args (`-r`, `--flag`) survive a replay.
 - Pane contents captured with `tmux capture-pane -p` into `panes/` when
   `@anka-capture-pane-contents on`.
 - Atomic write: `snapshot.json.tmp` → rename, then update `last` symlink.
@@ -107,8 +110,9 @@ Deterministic order:
    pixel-exact geometry.
 4. Restore pane contents (when present).
 5. Relaunch programs by `restore.kind`: `shell` → nothing; `process` →
-   open pane with the command + `remain-on-exit` (fallback: `send-keys`);
-   `nvim` → `nvim -S <Session.vim>`.
+   `send-keys` the captured command (so the pane survives if it exits), with the
+   launcher `--` repaired (see Capture); `nvim` → `nvim -S <Session.vim>` when a
+   session file exists in the cwd, else the captured argv (reopen the files).
 6. Set active window/pane, then client `active`/`last` session.
 
 Non-destructive by default; partial restore continues best-effort with a
@@ -135,9 +139,11 @@ the `@anka_status` user option when it saves; users reference `#{@anka_status}`.
 
 ## Picker (lazy restore)
 
-`anka pick` is a built-in ratatui fuzzy picker (zero external deps) listing the
-sessions in a snapshot; the chosen session is restored on its own. Bound to a
-tmux `display-popup`.
+`anka pick` is a built-in, dependency-free picker: it lists the sessions in the
+`last` snapshot (marking which are already live) and restores the one you choose
+on its own. A numbered menu — not a TUI crate — keeps the "one tiny static
+binary" promise; it reads cleanly inside the popup's tty. Bound to a tmux
+`display-popup -E`.
 
 ## Freeze
 
@@ -166,12 +172,20 @@ See the table in `README.md`. All options read via `tmux show-options -gqv`.
 
 ## Roadmap
 
-- **v0.1.0** — scaffold, config/store/model/tmux infra, real `anka save`
+- **v0.1.0** ✅ — scaffold, config/store/model/tmux infra, real `anka save`
   (capture → JSON, incl. pane contents + process resolution). Restore/daemon/
   tui/freeze stubbed.
-- **v0.2.0** — `anka restore` (full deterministic rebuild) + integration tests.
-- **v0.3.0** — event-driven auto-save hooks + auto-restore + status widget.
-- **v0.4.0** — interval daemon, named snapshots polish.
-- **v0.5.0** — ratatui picker (lazy per-session restore).
-- **v0.6.0** — freeze (blueprint + shell export) and `anka up`.
-- **v1.0.0** — nvim strategy, docs, release binaries via CI.
+- **v0.2.0** ✅ — `anka restore` (full deterministic rebuild) + integration tests.
+- **v0.3.0** ✅ — event-driven auto-save hooks + auto-restore + status widget.
+- **v0.4.0** ✅ — interval daemon, named snapshots polish.
+- **v0.4.1–0.4.2** ✅ — restore robustness: keep panes alive when a command
+  exits; capture the pane's foreground program (not a descendant); rebuild pane
+  commands from `/proc` without corrupting them.
+- **v0.5.0** ✅ — lazy per-session restore picker (dependency-free, not ratatui,
+  to preserve the tiny-binary goal).
+- **v0.6.0** ✅ — freeze (blueprint + standalone shell export) and `anka up`.
+- **v0.7.0** ✅ — nvim `session`/argv strategy; `npm exec`/`npx` `--` repair so
+  relaunched programs keep their args; release workflow tags (`v*` → CI builds
+  static x86_64/aarch64 binaries).
+- **v1.0.0** (next) — nvim `:mksession` capture via an editor-side hook;
+  pane-contents restore; expanded docs.

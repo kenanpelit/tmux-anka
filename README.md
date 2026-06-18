@@ -22,11 +22,13 @@ a restart — automatically.
 - **Auto-restore on start** — your last snapshot comes back when the tmux server
   starts.
 - **Named snapshots** — `anka save work`, `anka restore work`, `anka list`.
-- **Lazy / per-session restore** — built-in TUI picker (`prefix + P`) restores
-  just the session you choose, saving memory.
-- **Program restore** — relaunches allow-listed programs by opening the pane
-  *with* the command (not by typing into a shell).
-- **nvim/vim sessions** — restored via the `Session.vim` strategy.
+- **Lazy / per-session restore** — built-in dependency-free picker
+  (`prefix + P`) restores just the session you choose, saving memory.
+- **Program restore** — relaunches allow-listed programs, faithfully preserving
+  their arguments (incl. repairing the `--` that `npm exec`/`npx` drop from
+  their process title).
+- **nvim/vim sessions** — resumes a `Session.vim` when present (the `session`
+  strategy), otherwise reopens the same files.
 - **Freeze to blueprint** — turn a snapshot into a re-runnable declarative spec
   (`anka up <name>`) or an exportable standalone shell script.
 
@@ -48,7 +50,7 @@ plugin directory — nothing is written to your `PATH`.
 |-----|--------|
 | `prefix + C-s` | Save snapshot |
 | `prefix + C-r` | Restore last snapshot |
-| `prefix + P` | Pick a session to restore (TUI) |
+| `prefix + P` | Pick a session to restore |
 
 ## Status widget
 
@@ -78,7 +80,7 @@ anka save [name]        Save current environment to a snapshot
 anka restore [name]     Restore a snapshot (default: last)
 anka list               List saved snapshots
 anka rm <name>          Remove a snapshot
-anka pick               Interactive per-session restore (TUI)
+anka pick               Interactive per-session restore
 anka freeze [name]      Freeze a snapshot to a declarative blueprint
 anka freeze --script    …also export a standalone shell script
 anka up <name>          Re-launch a frozen blueprint
