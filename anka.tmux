@@ -73,7 +73,10 @@ bind_anka "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \
 bind_anka "$LAST_KEY"        run-shell "$BINARY session last"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
-tmux set-hook -g session-closed   "run-shell \"$BINARY hook session-closed >/dev/null\""
+# NOT session-closed: it fires after the session is already gone, so saving there
+# prunes it from the snapshot — and cascades on logout/shutdown as every session
+# tears down, losing them after a reboot. Unset it (clears any stale hook too).
+tmux set-hook -gu session-closed
 tmux set-hook -g client-detached  "run-shell \"$BINARY hook client-detached >/dev/null\""
 
 # ── Optional interval daemon ─────────────────────────────────────────────────

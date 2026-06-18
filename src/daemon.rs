@@ -56,10 +56,23 @@ fn write_pid(lock: &Path) {
     let _ = fs::write(lock, std::process::id().to_string());
 }
 
-/// Event-driven save, invoked by tmux hooks (`session-closed`,
-/// `client-detached`, …).
-pub fn hook(_event: &str) -> Result<()> {
-    capture::save(None)
+/// Whether a tmux hook event should trigger a save.
+///
+/// `session-closed` must NOT: by the time it fires the session is already gone,
+/// so saving would re-capture the *smaller* session set and prune the just-closed
+/// session from the snapshot. Worse, on logout/shutdown every session closes in
+/// turn, so each `session-closed` shrinks the snapshot until only the
+/// last-to-die sessions remain — silently losing the rest after a reboot.
+pub fn should_save_on(event: &str) -> bool {
+    event != "session-closed"
+}
+
+/// Event-driven save, invoked by tmux hooks (`client-detached`, …).
+pub fn hook(event: &str) -> Result<()> {
+    if should_save_on(event) {
+        capture::save(None)?;
+    }
+    Ok(())
 }
 
 fn interval_duration() -> Duration {
@@ -70,4 +83,16 @@ fn interval_duration() -> Duration {
         }
     }
     Duration::from_secs(Config::load().save_interval_mins * 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_closed_never_saves() {
+        // Regression: closing a session must not prune it from the snapshot.
+        assert!(!should_save_on("session-closed"));
+        assert!(should_save_on("client-detached"));
+    }
 }
