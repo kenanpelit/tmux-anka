@@ -42,6 +42,12 @@ opt() { tmux show-options -gqv "$1"; }
 SAVE_KEY="$(opt @anka-save-key)";       SAVE_KEY="${SAVE_KEY:-C-s}"
 RESTORE_KEY="$(opt @anka-restore-key)"; RESTORE_KEY="${RESTORE_KEY:-C-r}"
 PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-P}"
+SWITCH_KEY="$(opt @anka-switch-key)";           SWITCH_KEY="${SWITCH_KEY:-s}"
+NEW_KEY="$(opt @anka-new-key)";                 NEW_KEY="${NEW_KEY:-C}"
+KILL_KEY="$(opt @anka-kill-key)";               KILL_KEY="${KILL_KEY:-X}"
+PROMOTE_KEY="$(opt @anka-promote-key)";         PROMOTE_KEY="${PROMOTE_KEY:-@}"
+SWITCH_NAME_KEY="$(opt @anka-switch-name-key)"; SWITCH_NAME_KEY="${SWITCH_NAME_KEY:-g}"
+LAST_KEY="$(opt @anka-last-key)";               LAST_KEY="${LAST_KEY:-S}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
 # Save/restore arka planda çalışır (run-shell -b). run-shell, komutun stdout'unu
@@ -52,6 +58,16 @@ PICK_KEY="$(opt @anka-pick-key)";       PICK_KEY="${PICK_KEY:-P}"
 tmux bind-key "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
 tmux bind-key "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
 tmux bind-key "$PICK_KEY"    display-popup -E "$BINARY pick"
+
+# ── Session management (replaces tmux-sessionx + tmux-sessionist) ─────────────
+# Switcher: an interactive popup over live + snapshot + zoxide sessions.
+tmux bind-key "$SWITCH_KEY"      display-popup -E "$BINARY switch"
+# Sessionist-style quick actions. command-prompt feeds the name as %%.
+tmux bind-key "$NEW_KEY"         command-prompt -p "New session:" "run-shell \"$BINARY session new '%%'\""
+tmux bind-key "$KILL_KEY"        run-shell "$BINARY session kill"
+tmux bind-key "$PROMOTE_KEY"     command-prompt -p "Promote pane to session:" "run-shell \"$BINARY session promote '%%'\""
+tmux bind-key "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \"$BINARY session switch '%%'\""
+tmux bind-key "$LAST_KEY"        run-shell "$BINARY session last"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
 tmux set-hook -g session-closed   "run-shell \"$BINARY hook session-closed >/dev/null\""
