@@ -137,13 +137,29 @@ exists yet, run `anka restore` (the `last` snapshot). Once per server start.
 `anka status` prints e.g. `✔ 11:30` (or `⟳` while saving). The binary updates
 the `@anka_status` user option when it saves; users reference `#{@anka_status}`.
 
-## Picker (lazy restore)
+## Session management (v0.8.0)
 
-`anka pick` is a built-in, dependency-free picker: it lists the sessions in the
-`last` snapshot (marking which are already live) and restores the one you choose
-on its own. A numbered menu — not a TUI crate — keeps the "one tiny static
-binary" promise; it reads cleanly inside the popup's tty. Bound to a tmux
-`display-popup -E`.
+Native replacement for `tmux-sessionist` (quick actions) and `tmux-sessionx`
+(fuzzy switcher), so neither plugin is needed.
+
+- **Switcher** (`anka switch`, `prefix + s`): an interactive popup over a unified
+  list — live sessions, the offline sessions in the `last` snapshot, all windows,
+  and (with `zoxide`) frecent dirs — `Tab` cycles those modes. Type to fuzzy
+  filter; a right-hand pane previews the highlighted target (`capture-pane`, a
+  snapshot summary, or a dir listing). `⏎` switches / restores / jumps / opens a
+  dir as a new session; `^n` new, `^r` rename, `^x` kill.
+  - Built **without** a TUI crate: a pure state machine (`switcher::state` —
+    items, fuzzy match, `apply(Key) -> Step`) drives a thin I/O shell
+    (`switcher::term` raw mode via `stty` + a stdin-byte key parser;
+    `switcher::mod` the loop, render, and effect dispatch). The logic is fully
+    unit-tested; the loop falls back to a numbered menu when stdin/stdout is not
+    a tty (pipes, tests), which is also what the integration tests drive.
+- **Quick actions** (`anka session …`): `new`/`kill`/`promote`/`switch`/`last`/
+  `rename`, bound to `prefix + C/X/@/g/S`. They act on the invoking pane's
+  session (via `$TMUX_PANE`); `kill` refuses the last session; `promote` moves
+  the current pane into a fresh session.
+
+`anka pick` is an alias of `anka switch`.
 
 ## Freeze
 
@@ -187,5 +203,8 @@ See the table in `README.md`. All options read via `tmux show-options -gqv`.
 - **v0.7.0** ✅ — nvim `session`/argv strategy; `npm exec`/`npx` `--` repair so
   relaunched programs keep their args; release workflow tags (`v*` → CI builds
   static x86_64/aarch64 binaries).
+- **v0.8.0** ✅ — native session management: interactive switcher (live +
+  snapshot + windows + zoxide, fuzzy + preview, inline new/rename/kill) and
+  `anka session` quick actions. Replaces tmux-sessionx + tmux-sessionist.
 - **v1.0.0** (next) — nvim `:mksession` capture via an editor-side hook;
   pane-contents restore; expanded docs.

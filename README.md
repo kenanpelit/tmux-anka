@@ -31,6 +31,11 @@ a restart — automatically.
   strategy), otherwise reopens the same files.
 - **Freeze to blueprint** — turn a snapshot into a re-runnable declarative spec
   (`anka up <name>`) or an exportable standalone shell script.
+- **Built-in session manager** — an interactive switcher (`prefix + s`) over
+  live + snapshot + zoxide sessions with a live preview and inline
+  new/rename/kill, plus sessionist-style quick actions (new/kill/promote/switch/
+  last). Replaces `tmux-sessionx` + `tmux-sessionist`; no external session
+  manager or fuzzy-finder needed.
 
 ## Requirements
 
@@ -67,7 +72,13 @@ git clone https://github.com/kenanpelit/tmux-anka \
 |-----|--------|
 | `prefix + C-s` | Save snapshot |
 | `prefix + C-r` | Restore last snapshot |
-| `prefix + P` | Pick a session to restore |
+| `prefix + s` | Session switcher (live + snapshot + zoxide) |
+| `prefix + P` | Pick a session to restore (opens the switcher) |
+| `prefix + C` | New named session |
+| `prefix + X` | Kill the current session |
+| `prefix + @` | Promote the current pane to a new session |
+| `prefix + g` | Switch to a session by name |
+| `prefix + S` | Switch to the last session |
 
 ## Usage
 
@@ -84,18 +95,27 @@ anka restore work       # bring "work" back (never clobbers a live session)
 anka rm work
 ```
 
-**Pick one session** (`prefix + P`) — restore just what you need instead of
-everything. A numbered menu opens in a popup:
+**Switch sessions** (`prefix + s`) — an interactive popup over your live
+sessions *and* the offline ones in your last snapshot (and, with `zoxide`,
+frecent dirs). Type to fuzzy-filter, `Tab` cycles sessions/windows/zoxide, and
+the right pane previews the highlighted target:
 
 ```
-anka — restore a session from snapshot 'default':
-
-   1)  KENP                     3 win · 5 panes  (live)
-   2)  Tor                      1 win · 2 panes
-   3)  media                    2 win · 3 panes
-
-select [1-3], or q to cancel:
+  search: dev▌
+┌ sessions ──────────┬ preview ───────────┐
+│ > KENP    5p (live)│ $ cargo test       │
+│   dev     2p       │ running 23 tests   │
+│   media   3p       │ ok. 23 passed      │
+│   Tor     1p (snap)│                    │
+└────────────────────┴────────────────────┘
+ ↑↓ select · ⏎ go · ^n new · ^r rename · ^x kill · Tab mode · esc cancel
 ```
+
+`⏎` switches to a live session, restores a snapshot one, jumps to a window, or
+opens a zoxide dir as a new session. `^n` makes a new session, `^r` renames,
+`^x` kills. (`prefix + P` opens the same switcher; on a non-tty it degrades to a
+numbered menu.) For quick, prompt-free actions there are also `prefix + C` (new),
+`X` (kill), `@` (promote pane), `g` (switch by name), and `S` (last session).
 
 **Freeze a layout to a re-runnable blueprint** — a hand-editable template you can
 relaunch anywhere, independent of the rolling snapshots:
@@ -130,7 +150,12 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-save-interval` | `10` | Interval daemon period in minutes (`0` disables) |
 | `@anka-restore-on-start` | `on` | Auto-restore last snapshot on server start |
 | `@anka-restore-overwrite` | `off` | Overwrite existing sessions on restore |
-| `@anka-save-key` / `@anka-restore-key` / `@anka-pick-key` | `C-s` / `C-r` / `P` | Keybindings |
+| `@anka-switch-preview` | `on` | Show the preview pane in the switcher |
+| `@anka-zoxide` | `on` | Enable the zoxide mode when `zoxide` is installed |
+| `@anka-save-key` / `@anka-restore-key` / `@anka-pick-key` | `C-s` / `C-r` / `P` | Snapshot keys |
+| `@anka-switch-key` | `s` | Open the switcher |
+| `@anka-new-key` / `@anka-kill-key` / `@anka-promote-key` | `C` / `X` / `@` | Session new/kill/promote |
+| `@anka-switch-name-key` / `@anka-last-key` | `g` / `S` | Switch by name / last session |
 
 ## CLI
 
@@ -139,7 +164,14 @@ anka save [name]        Save current environment to a snapshot
 anka restore [name]     Restore a snapshot (default: last)
 anka list               List saved snapshots
 anka rm <name>          Remove a snapshot
-anka pick               Interactive per-session restore
+anka pick               Open the session switcher (alias of `switch`)
+anka switch             Interactive session switcher (live + snapshot + zoxide)
+anka session new <name>     Create / switch to a named session
+anka session kill           Kill the current session, switching away first
+anka session promote <name> Move the current pane into a new session
+anka session switch <name>  Switch to a session by name
+anka session last           Switch to the last session
+anka session rename <new>   Rename the current session
 anka freeze [name]      Freeze a snapshot to a declarative blueprint
 anka freeze --script    …also export a standalone shell script
 anka up <name>          Re-launch a frozen blueprint
