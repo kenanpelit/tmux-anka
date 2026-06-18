@@ -48,6 +48,7 @@ KILL_KEY="$(opt @anka-kill-key)";               KILL_KEY="${KILL_KEY:-X}"
 PROMOTE_KEY="$(opt @anka-promote-key)";         PROMOTE_KEY="${PROMOTE_KEY:-@}"
 SWITCH_NAME_KEY="$(opt @anka-switch-name-key)"; SWITCH_NAME_KEY="${SWITCH_NAME_KEY:-g}"
 LAST_KEY="$(opt @anka-last-key)";               LAST_KEY="${LAST_KEY:-S}"
+MENU_KEY="$(opt @anka-menu-key)";               MENU_KEY="${MENU_KEY:-F}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
 # Set any @anka-*-key to 'none' to skip that binding (keep your own).
@@ -71,6 +72,10 @@ bind_anka "$KILL_KEY"        run-shell "$BINARY session kill"
 bind_anka "$PROMOTE_KEY"     command-prompt -p "Promote pane to session:" "run-shell \"$BINARY session promote '%%'\""
 bind_anka "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \"$BINARY session switch '%%'\""
 bind_anka "$LAST_KEY"        run-shell "$BINARY session last"
+
+# Action menu (replaces tmux-fzf). run-shell captures the invoking client/session
+# (#{...} expands here, not in display-popup -E); anka reopens itself in a popup.
+bind_anka "$MENU_KEY"        run-shell -b "$BINARY menu --client '#{client_name}' --session '#{session_name}'"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
 # NOT session-closed: it fires after the session is already gone, so saving there

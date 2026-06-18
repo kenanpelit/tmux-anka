@@ -38,6 +38,18 @@ pub enum Cmd {
         /// File with pane text to pick from (default: stdin) — used inside the popup
         source: Option<String>,
     },
+    /// Interactive action menu (command/keybinding/process/window/pane)
+    Menu {
+        /// Internal: run the picker inside the popup (else open the popup)
+        #[arg(long)]
+        run: bool,
+        /// Invoking client name (#{client_name})
+        #[arg(long)]
+        client: Option<String>,
+        /// Invoking session name (#{session_name})
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Session management actions (sessionist-style)
     Session {
         #[command(subcommand)]

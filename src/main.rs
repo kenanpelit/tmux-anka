@@ -3,7 +3,9 @@ mod cli;
 mod config;
 mod daemon;
 mod freeze;
+mod menu;
 mod model;
+mod picker;
 mod process;
 mod restore;
 mod session;
@@ -37,6 +39,9 @@ fn run() -> Result<()> {
         Cmd::Up { name } => freeze::up(&name),
         Cmd::Switch => switcher::run(),
         Cmd::Url { pane, source } => url::run(pane.as_deref(), source.as_deref()),
+        Cmd::Menu { run, client, session } => {
+            menu::run(run, client.as_deref(), session.as_deref())
+        }
         Cmd::Session { action } => session::run(action),
         Cmd::Status => status::print(),
         Cmd::Daemon => daemon::run(),
