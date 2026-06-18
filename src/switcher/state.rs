@@ -81,6 +81,41 @@ pub fn fuzzy_score(query: &str, hay: &str) -> Option<i32> {
     (qi == q.len()).then_some(score)
 }
 
+/// Char indices of `hay` matched by `query` (greedy subsequence, case-insensitive),
+/// or `None` if `query` isn't a subsequence. Indices align with `hay.chars()` so
+/// callers can highlight the matched characters.
+pub fn fuzzy_positions(query: &str, hay: &str) -> Option<Vec<usize>> {
+    if query.is_empty() {
+        return Some(Vec::new());
+    }
+    let q: Vec<char> = query.chars().flat_map(|c| c.to_lowercase()).collect();
+    let mut qi = 0;
+    let mut pos = Vec::new();
+    for (hi, hc) in hay.chars().enumerate() {
+        if qi >= q.len() {
+            break;
+        }
+        if hc.to_lowercase().next() == Some(q[qi]) {
+            pos.push(hi);
+            qi += 1;
+        }
+    }
+    (qi == q.len()).then_some(pos)
+}
+
+#[cfg(test)]
+mod fuzzy_tests {
+    use super::*;
+
+    #[test]
+    fn positions_subsequence() {
+        assert_eq!(fuzzy_positions("ac", "abc"), Some(vec![0, 2]));
+        assert_eq!(fuzzy_positions("AB", "xaybz"), Some(vec![1, 3]));
+        assert_eq!(fuzzy_positions("", "abc"), Some(vec![]));
+        assert_eq!(fuzzy_positions("xyz", "abc"), None);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
     Sessions,

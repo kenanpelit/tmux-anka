@@ -6,12 +6,13 @@ use std::io::{self, Read, Write};
 use anyhow::Result;
 
 use crate::switcher::term::{self, RawMode};
-use crate::switcher::{fuzzy_score, Key};
+use crate::switcher::{fuzzy_positions, fuzzy_score, Key};
 
 const C_BORDER: &str = "\x1b[38;5;240m";
 const C_TITLE: &str = "\x1b[1;38;5;75m";
 const C_NUM: &str = "\x1b[38;5;220m";
 const C_ACCENT: &str = "\x1b[38;5;75m";
+const C_MATCH: &str = "\x1b[1;38;5;214m";
 const FG: &str = "\x1b[39m";
 const R: &str = "\x1b[0m";
 
@@ -175,12 +176,20 @@ fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, titl
         out.push_str(&bar);
         let num = idx + 1;
         let badge = if num <= 9 { format!("{C_NUM}{num}{FG}") } else { " ".into() };
-        let label: String = items[filtered[idx]].chars().take(body_w).collect();
+        let item = &items[filtered[idx]];
+        let positions = if query.is_empty() { None } else { fuzzy_positions(query, item) };
+        let base = if sel { "\x1b[1m" } else { "" };
         out.push_str(&term::move_to(r, 4));
-        if sel {
-            out.push_str("\x1b[1m");
+        out.push_str(&format!("{badge} {base}"));
+        // highlight the chars matched by the live query (fzf-style)
+        for (p, ch) in item.chars().take(body_w).enumerate() {
+            if positions.as_ref().is_some_and(|v| v.contains(&p)) {
+                out.push_str(&format!("{C_MATCH}{ch}{R}{base}"));
+            } else {
+                out.push(ch);
+            }
         }
-        out.push_str(&format!("{badge} {label}{R}"));
+        out.push_str(R);
         out.push_str(&term::move_to(r, cols));
         out.push_str(&format!("{C_BORDER}│{R}"));
     }
