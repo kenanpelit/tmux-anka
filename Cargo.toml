@@ -1,6 +1,6 @@
 [package]
 name = "anka"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 description = "Freeze and resurrect tmux sessions, exactly."
 license = "MIT"
