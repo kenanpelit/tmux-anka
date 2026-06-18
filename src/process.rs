@@ -62,7 +62,7 @@ fn reconstruct(raw: &[u8]) -> Option<String> {
         .collect();
     match parts.len() {
         0 => None,
-        1 => parts.into_iter().next(),
+        1 => parts.into_iter().next().map(|s| normalize_launcher(&s)),
         _ => Some(
             parts
                 .iter()
@@ -73,10 +73,47 @@ fn reconstruct(raw: &[u8]) -> Option<String> {
     }
 }
 
+/// Repair the `npm exec` / `npx` / `pnpm dlx|exec` / `yarn dlx` launcher form.
+///
+/// node rewrites its argv into one space-joined process title (setproctitle),
+/// and in doing so **drops the `--` separator** between the package spec and the
+/// args meant for the executed program. Replayed verbatim, `npm exec <pkg> -r
+/// --foo` makes npm swallow `-r`/`--foo` as its *own* config — the user sees
+/// `npm warn Unknown cli config "--…"` and the program launches without them.
+/// Re-insert the `--` right after the package spec so the args reach the package.
+fn normalize_launcher(cmd: &str) -> String {
+    let toks: Vec<&str> = cmd.split_whitespace().collect();
+    let head = match toks.as_slice() {
+        ["npm", "exec", ..]
+        | ["pnpm", "exec", ..]
+        | ["pnpm", "dlx", ..]
+        | ["yarn", "dlx", ..] => 2,
+        ["npx", ..] => 1,
+        _ => return cmd.to_string(),
+    };
+    let rest = &toks[head..];
+    // An explicit `--` anywhere means the user already separated args; leave it.
+    if rest.contains(&"--") {
+        return cmd.to_string();
+    }
+    // The package spec is the first non-flag token (skipping launcher flags like
+    // `--yes`); args meant for the package are everything after it.
+    let Some(pkg) = rest.iter().position(|t| !t.starts_with('-')) else {
+        return cmd.to_string();
+    };
+    if pkg + 1 >= rest.len() {
+        return cmd.to_string(); // nothing after the package → nothing to separate
+    }
+    let mut out: Vec<&str> = toks[..head + pkg + 1].to_vec();
+    out.push("--");
+    out.extend_from_slice(&rest[pkg + 1..]);
+    out.join(" ")
+}
+
 /// POSIX shell-quote a single argument. Unquoted when it only contains
 /// characters no shell treats specially; otherwise wrapped in single quotes
 /// (with embedded `'` rendered as `'\''`).
-fn shell_quote(arg: &str) -> String {
+pub fn shell_quote(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();
     }
@@ -157,17 +194,46 @@ mod tests {
         assert_eq!(reconstruct(raw).unwrap(), r#"sh -c 'echo '\''hi'\'''"#);
     }
 
-    // Regression: npm/node rewrite argv into one space-joined string
-    // (setproctitle), padded with trailing NULs. That single element is a whole
-    // command line, not one argument — emit it verbatim, never quoted, or the
-    // shell reads it as a single bogus filename ("no such file or directory").
+    // npm/node rewrite argv into one space-joined string (setproctitle), padded
+    // with trailing NULs. That single element is a whole command line, not one
+    // argument — emit it verbatim (never quoted, or the shell reads it as one
+    // bogus filename), but re-insert the `--` that setproctitle drops between
+    // the package spec and its args, or npm swallows them as its own config.
     #[test]
-    fn single_element_cmdline_is_verbatim() {
-        let raw = b"npm exec @anthropic-ai/claude-code -r\0\0\0\0";
+    fn npm_exec_reinserts_dropped_separator() {
+        let raw = b"npm exec @anthropic-ai/claude-code -r --dangerously-skip-permissions\0\0\0";
         assert_eq!(
             reconstruct(raw).unwrap(),
-            "npm exec @anthropic-ai/claude-code -r"
+            "npm exec @anthropic-ai/claude-code -- -r --dangerously-skip-permissions"
         );
+    }
+
+    #[test]
+    fn npm_exec_without_args_is_unchanged() {
+        let raw = b"npm exec @anthropic-ai/claude-code\0\0";
+        assert_eq!(
+            reconstruct(raw).unwrap(),
+            "npm exec @anthropic-ai/claude-code"
+        );
+    }
+
+    #[test]
+    fn npm_exec_with_existing_separator_is_unchanged() {
+        let raw = b"npm exec pkg -- --flag\0";
+        assert_eq!(reconstruct(raw).unwrap(), "npm exec pkg -- --flag");
+    }
+
+    #[test]
+    fn npx_form_also_gets_separator() {
+        let raw = b"npx some-cli --watch\0\0";
+        assert_eq!(reconstruct(raw).unwrap(), "npx some-cli -- --watch");
+    }
+
+    // A non-launcher single element (e.g. a self-retitled daemon) is untouched.
+    #[test]
+    fn non_launcher_single_element_is_verbatim() {
+        let raw = b"postgres: writer process\0\0";
+        assert_eq!(reconstruct(raw).unwrap(), "postgres: writer process");
     }
 
     #[test]

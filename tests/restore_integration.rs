@@ -61,7 +61,17 @@ fn restore_preserves_pane_cwd() {
     let out = s.anka(&["restore", "snap"]);
     assert!(out.status.success(), "restore failed: {}", err(&out));
 
-    let cwd = s.tmux(&["display-message", "-p", "-t", "work", "#{pane_current_path}"]);
+    // Same as on save: the restored shell's rc can transiently report the
+    // server's cwd before settling into the `-c` dir, so poll for settle rather
+    // than reading the (racy) value the instant restore returns.
+    let mut cwd = String::new();
+    for _ in 0..40 {
+        cwd = s.tmux(&["display-message", "-p", "-t", "work", "#{pane_current_path}"]);
+        if cwd == "/tmp" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert_eq!(cwd, "/tmp", "pane cwd not preserved");
 }
 
