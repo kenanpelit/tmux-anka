@@ -1,9 +1,10 @@
 //! Restore a snapshot back into tmux.
 //!
 //! Deterministic rebuild: recreate sessions (skipping live ones unless
-//! `@anka-restore-overwrite`), their windows in index order, the panes (created
-//! directly with their launch command for process/nvim panes), then apply the
-//! saved tmux layout for pixel-exact geometry.
+//! `@anka-restore-overwrite`), their windows in index order, the panes as plain
+//! shells, then apply the saved tmux layout for pixel-exact geometry. Programs
+//! (process/nvim panes) are relaunched by typing into the pane's shell, so a
+//! pane survives even if its command exits or fails (e.g. ssh).
 
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -93,22 +94,16 @@ fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
         if wi == 0 {
             v.extend(["-x", "200", "-y", "50"].map(String::from));
         }
-        if let Some(cmd) = launch_cmd(first, cfg) {
-            v.push(cmd);
-        }
         let first_pane_id = run_str(&v)?;
         let mut pane_ids = vec![first_pane_id.clone()];
 
-        // Remaining panes: split off the first pane, then fix geometry below.
+        // Remaining panes: split off the first pane (plain shells), fix geometry below.
         for p in panes.iter().skip(1) {
             let mut sv: Vec<String> =
                 ["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", first_pane_id.as_str(), "-c"]
                     .map(String::from)
                     .to_vec();
             sv.push(p.cwd.clone());
-            if let Some(cmd) = launch_cmd(Some(p), cfg) {
-                sv.push(cmd);
-            }
             if let Ok(pid) = run_str(&sv) {
                 pane_ids.push(pid);
             }
@@ -116,6 +111,15 @@ fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
 
         if !w.layout.is_empty() {
             tmux::run_ok(&["select-layout", "-t", &first_pane_id, &w.layout]);
+        }
+
+        // Relaunch programs by typing into each pane's shell, so the pane
+        // survives if the command exits or fails (ssh, editors, REPLs, …).
+        for (p, pid) in panes.iter().zip(pane_ids.iter()) {
+            if let Some(cmd) = launch_cmd(Some(p), cfg) {
+                tmux::run_ok(&["send-keys", "-t", pid, "-l", &cmd]);
+                tmux::run_ok(&["send-keys", "-t", pid, "Enter"]);
+            }
         }
 
         // Active pane within the window (by position among created panes).

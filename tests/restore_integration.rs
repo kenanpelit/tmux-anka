@@ -3,6 +3,8 @@
 mod common;
 use common::*;
 
+use std::time::Duration;
+
 #[test]
 fn restore_rebuilds_session_tree() {
     if !has_tmux() {
@@ -52,6 +54,40 @@ fn restore_preserves_pane_cwd() {
 
     let cwd = s.tmux(&["display-message", "-p", "-t", "work", "#{pane_current_path}"]);
     assert_eq!(cwd, "/tmp", "pane cwd not preserved");
+}
+
+#[test]
+fn restore_keeps_pane_alive_when_process_command_exits() {
+    if !has_tmux() {
+        eprintln!("skipping: tmux not installed");
+        return;
+    }
+    let s = Server::start("proc-exit");
+
+    // A process pane whose command exits immediately (`true`). The pane must
+    // survive as a shell — not vanish and take the session with it.
+    let dir = s.dir.join("snapshots").join("rec");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = r#"{
+      "schema":1,"anka_version":"t","saved_at":"t",
+      "client":{"active_session":null,"last_session":null},
+      "sessions":[{"name":"rec","windows":[{"index":1,"name":"w","active":true,
+        "layout":"","automatic_rename":true,
+        "panes":[{"index":1,"active":true,"title":"t","cwd":"/tmp","command":"ssh",
+          "pid":0,"history_size":0,
+          "restore":{"kind":"process","command":"true"}}]}]}]}"#;
+    std::fs::write(dir.join("snapshot.json"), json).unwrap();
+
+    let out = s.anka(&["restore", "rec"]);
+    assert!(out.status.success(), "restore failed: {}", err(&out));
+    std::thread::sleep(Duration::from_millis(400));
+
+    let names = sessions(&s.socket);
+    assert!(
+        names.contains(&"rec".to_string()),
+        "session vanished after the process command exited: {names:?}"
+    );
+    assert_eq!(pane_count(&s.socket, "rec"), 1, "pane did not survive");
 }
 
 #[test]
