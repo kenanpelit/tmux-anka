@@ -63,10 +63,25 @@ pub fn run(source: Option<&str>) -> Result<()> {
 
 fn open(url: &str) {
     let browser = std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".into());
-    // Detach so the browser outlives the closing popup, and silence its output.
-    let _ = Command::new("setsid")
+    // Detach (setsid -f) so the browser outlives the closing popup; *wait* for
+    // setsid to return so it has reparented the browser into its own session
+    // before we exit (otherwise the popup teardown can SIGHUP it).
+    let res = Command::new("setsid")
         .arg("-f")
         .arg(&browser)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if let Ok(s) = &res {
+        if s.success() {
+            return;
+        }
+    }
+    // Fallback: try the browser directly (no setsid), e.g. setsid missing or the
+    // browser is only on a login PATH.
+    let _ = Command::new(&browser)
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
