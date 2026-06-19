@@ -52,6 +52,11 @@ MENU_KEY="$(opt @anka-menu-key)";               MENU_KEY="${MENU_KEY:-F}"
 GRAB_KEY="$(opt @anka-grab-key)";               GRAB_KEY="${GRAB_KEY:-Space}"
 SEARCH_KEY="$(opt @anka-search-key)";           SEARCH_KEY="${SEARCH_KEY:-m}"
 
+# Popup size for the full-screen TUIs (switch/pick). Override with
+# @anka-popup-width / @anka-popup-height (any display-popup size: 80%, 120, …).
+POPUP_W="$(opt @anka-popup-width)";  POPUP_W="${POPUP_W:-80%}"
+POPUP_H="$(opt @anka-popup-height)"; POPUP_H="${POPUP_H:-75%}"
+
 # ── Keybindings ──────────────────────────────────────────────────────────────
 # Set any @anka-*-key to 'none' to skip that binding (keep your own).
 bind_anka() { [ "$1" = none ] && return 0; tmux bind-key "$@"; }
@@ -63,11 +68,11 @@ bind_anka() { [ "$1" = none ] && return 0; tmux bind-key "$@"; }
 # hatalar yine görünebilsin.
 bind_anka "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
 bind_anka "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
-bind_anka "$PICK_KEY"    display-popup -E "$BINARY pick"
+bind_anka "$PICK_KEY"    display-popup -w "$POPUP_W" -h "$POPUP_H" -E "$BINARY pick"
 
 # ── Session management (replaces tmux-sessionx + tmux-sessionist) ─────────────
 # Switcher: an interactive popup over live + snapshot + zoxide sessions.
-bind_anka "$SWITCH_KEY"      display-popup -E "$BINARY switch"
+bind_anka "$SWITCH_KEY"      display-popup -w "$POPUP_W" -h "$POPUP_H" -E "$BINARY switch"
 # Sessionist-style quick actions. command-prompt feeds the name as %%.
 bind_anka "$NEW_KEY"         command-prompt -p "New session:" "run-shell \"$BINARY session new '%%'\""
 bind_anka "$KILL_KEY"        run-shell "$BINARY session kill"
