@@ -24,14 +24,24 @@ const SCHEMES: &[&str] = &["https://", "http://", "ftp://", "file://", "mailto:"
 /// explicit-scheme URLs, `www.` hosts and path-bearing bare domains
 /// (`github.com/foo`); the latter two get `https://` prepended. A path is
 /// required for scheme-less domains, so bare filenames (`main.rs`,
-/// `config.json`) are never mistaken for URLs.
+/// `config.json`) are never mistaken for URLs. The `owner/repo` GitHub shorthand
+/// is recognised *only* on tmux `@plugin '…'` lines, so ordinary `dir/file`
+/// tokens (paths, ratios, prose) are never turned into github.com URLs.
 pub fn extract_urls(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    for token in text.split_whitespace() {
-        if let Some(u) = url_from_token(token) {
-            if seen.insert(u.clone()) {
-                out.push(u);
+    let mut push = |u: String| {
+        if seen.insert(u.clone()) {
+            out.push(u);
+        }
+    };
+    for line in text.lines() {
+        if let Some(repo) = plugin_shorthand(line) {
+            push(format!("https://github.com/{repo}"));
+        }
+        for token in line.split_whitespace() {
+            if let Some(u) = url_from_token(token) {
+                push(u);
             }
         }
     }
@@ -60,17 +70,27 @@ fn url_from_token(token: &str) -> Option<String> {
     if is_domain_path(cand) {
         return Some(format!("https://{cand}"));
     }
-    // 4. GitHub `owner/repo` shorthand (the tmux `@plugin` form).
-    if is_github_shorthand(cand) {
-        return Some(format!("https://github.com/{cand}"));
-    }
+    // GitHub `owner/repo` shorthand is handled in extract_urls, gated on the
+    // `@plugin` form — bare `dir/file` tokens here must NOT become URLs.
     None
 }
 
-/// `owner/repo` GitHub shorthand → github.com/owner/repo. One slash, ASCII slug
-/// segments, owner has no dot (domains go through `is_domain_path`), and it isn't
-/// an absolute/relative path. Non-ASCII (e.g. Turkish words) is rejected, so
-/// prose like `kaydet/yükle` is not mistaken for a repo.
+/// Pull the `owner/repo` out of a tmux `@plugin '…'` / `@plugin "…"` line. The
+/// GitHub shorthand applies only here, so arbitrary `dir/file` tokens elsewhere
+/// in pane output are never mistaken for repos.
+fn plugin_shorthand(line: &str) -> Option<String> {
+    let after = line.split_once("@plugin")?.1;
+    let start = after.find(['\'', '"'])?;
+    let quote = after.as_bytes()[start] as char;
+    let rest = &after[start + 1..];
+    let end = rest.find(quote)?;
+    let repo = &rest[..end];
+    is_github_shorthand(repo).then(|| repo.to_string())
+}
+
+/// Validate an `@plugin` value as `owner/repo`: one slash, ASCII slug segments,
+/// owner without a dot, not an absolute/relative path. Guards against a malformed
+/// or non-repo `@plugin '…'` value becoming a bogus github.com URL.
 fn is_github_shorthand(s: &str) -> bool {
     if s.starts_with(['/', '.', '~']) {
         return false;
@@ -276,18 +296,30 @@ mod tests {
     }
 
     #[test]
-    fn github_shorthand_owner_repo() {
+    fn github_shorthand_only_in_plugin_lines() {
+        // The `@plugin '…'` form (single or double quotes) → github URL.
         assert_eq!(
             extract_urls("set -g @plugin 'tmux-plugins/tpm'  # mgr"),
             vec!["https://github.com/tmux-plugins/tpm"]
         );
         assert_eq!(
-            extract_urls("kenanpelit/tmux-anka and BurntSushi/ripgrep"),
-            vec![
-                "https://github.com/kenanpelit/tmux-anka".to_string(),
-                "https://github.com/BurntSushi/ripgrep".to_string(),
-            ]
+            extract_urls("set -g @plugin \"kenanpelit/tmux-anka\""),
+            vec!["https://github.com/kenanpelit/tmux-anka"]
         );
+        // Several @plugin lines, kept in order and de-duplicated.
+        assert_eq!(
+            extract_urls("@plugin 'a/b'\n@plugin 'c/d'\n@plugin 'a/b'"),
+            vec!["https://github.com/a/b".to_string(), "https://github.com/c/d".to_string()]
+        );
+    }
+
+    #[test]
+    fn bare_owner_repo_is_not_github() {
+        // The whole point: ordinary `dir/file` tokens in pane output (paths,
+        // ratios, prose) are never turned into github URLs — only @plugin is.
+        assert!(extract_urls("kenanpelit/tmux-anka and BurntSushi/ripgrep").is_empty());
+        assert!(extract_urls("edit src/main.rs modules/scripts/bin").is_empty());
+        assert!(extract_urls("aspect 16/9 path usr/bin foo/bar").is_empty());
     }
 
     #[test]
