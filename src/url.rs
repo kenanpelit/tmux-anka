@@ -13,9 +13,33 @@ use anyhow::{Context, Result};
 
 use crate::switcher::fuzzy_score;
 
-/// Trailing / leading punctuation peeled off a candidate URL.
-const TRAIL: &[char] = &[')', '.', ',', ';', ':', '!', '?', ']', '}', '>', '"', '\''];
+/// Leading punctuation peeled off a candidate URL (`(`, `[a](`, quotes, …).
 const LEAD: &[char] = &['(', '[', '{', '<', '"', '\''];
+
+/// A URL body character. Anything outside this set (`{`, `}`, `\`, quotes,
+/// parens, whitespace) ends the URL — so source-code literals such as
+/// `format!("https://{x}")` or `"…/a/b".to_string()` don't yield bogus URLs.
+/// Mirrors tmux-fzf-url's character class.
+fn is_url_body(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '-' | '+' | '&' | '@' | '#' | '/' | '%' | '?' | '=' | '~' | '_' | '|' | '!' | ':' | ',' | '.' | ';'
+        )
+}
+
+/// A character a URL may legitimately end on; trailing `.,:;!?` and other
+/// punctuation is trimmed off the matched span.
+fn is_url_tail(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '&' | '@' | '#' | '/' | '%' | '=' | '~' | '_' | '|')
+}
+
+/// The URL span at the start of `s`: a run of body chars with trailing
+/// non-tail punctuation stripped.
+fn scan_url(s: &str) -> &str {
+    let end = s.find(|c| !is_url_body(c)).unwrap_or(s.len());
+    s[..end].trim_end_matches(|c| !is_url_tail(c))
+}
 
 /// Schemes recognised verbatim (kept as-is, no prefix added).
 const SCHEMES: &[&str] = &["https://", "http://", "ftp://", "file://", "mailto:"];
@@ -52,7 +76,7 @@ fn url_from_token(token: &str) -> Option<String> {
     // 1. Explicit scheme anywhere in the token (also peels leading "(", "[a](").
     for scheme in SCHEMES {
         if let Some(pos) = token.find(scheme) {
-            let u = token[pos..].trim_end_matches(TRAIL);
+            let u = scan_url(&token[pos..]);
             if u.len() > scheme.len() {
                 return Some(u.to_string());
             }
@@ -60,13 +84,13 @@ fn url_from_token(token: &str) -> Option<String> {
     }
     // 2. www. host → assume https.
     if let Some(pos) = token.find("www.") {
-        let u = token[pos..].trim_end_matches(TRAIL);
+        let u = scan_url(&token[pos..]);
         if u.len() > 4 && u[4..].contains('.') {
             return Some(format!("https://{u}"));
         }
     }
     // 3. Scheme-less, path-bearing domain (host.tld/…).
-    let cand = token.trim_start_matches(LEAD).trim_end_matches(TRAIL);
+    let cand = scan_url(token.trim_start_matches(LEAD));
     if is_domain_path(cand) {
         return Some(format!("https://{cand}"));
     }
@@ -320,6 +344,33 @@ mod tests {
         assert!(extract_urls("kenanpelit/tmux-anka and BurntSushi/ripgrep").is_empty());
         assert!(extract_urls("edit src/main.rs modules/scripts/bin").is_empty());
         assert!(extract_urls("aspect 16/9 path usr/bin foo/bar").is_empty());
+    }
+
+    #[test]
+    fn no_garbage_from_source_literals() {
+        // Displaying source/chat once produced URLs like `https://{cand`,
+        // `https://github.com/a/b".to_string(` and `https://\`. A URL must never
+        // contain code-literal punctuation.
+        let samples = [
+            r#"return Some(format!("https://github.com/{cand}"));"#,
+            r#"let u = format!("https://{u}");"#,
+            r#"vec!["https://github.com/a/b".to_string()]"#,
+            r#"a backslash \ then https://x.example/ok and (https://y.example/p)"#,
+        ];
+        for s in samples {
+            for u in extract_urls(s) {
+                assert!(
+                    !u.contains(['{', '}', '\\', '"', '\'', '(', ')']),
+                    "garbage URL {u:?} extracted from {s:?}"
+                );
+            }
+        }
+        // Real URLs in the noisy line are still recovered, cleanly.
+        let urls = extract_urls(r#"\ https://x.example/ok and (https://y.example/p)."#);
+        assert_eq!(
+            urls,
+            vec!["https://x.example/ok".to_string(), "https://y.example/p".to_string()]
+        );
     }
 
     #[test]
