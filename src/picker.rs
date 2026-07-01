@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use anyhow::Result;
 
 use crate::switcher::term::{self, RawMode};
-use crate::switcher::{fuzzy_positions, fuzzy_score, Key};
+use crate::switcher::{fuzzy_positions, fuzzy_rank, Key};
 
 const C_BORDER: &str = "\x1b[38;5;240m";
 const C_TITLE: &str = "\x1b[1;38;5;75m";
@@ -124,13 +124,7 @@ pub fn pick_str(items: &[String], title: &str) -> Result<Option<String>> {
 }
 
 fn refilter(items: &[String], query: &str) -> Vec<usize> {
-    let mut scored: Vec<(usize, i32)> = items
-        .iter()
-        .enumerate()
-        .filter_map(|(i, u)| fuzzy_score(query, u).map(|s| (i, s)))
-        .collect();
-    scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    scored.into_iter().map(|(i, _)| i).collect()
+    fuzzy_rank(items, query, |u| u.clone())
 }
 
 fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, title: &str) {

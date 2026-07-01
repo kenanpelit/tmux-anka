@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-use crate::switcher::fuzzy_score;
+use crate::switcher::fuzzy_best;
 
 /// Leading punctuation peeled off a candidate URL (`(`, `[a](`, quotes, …).
 const LEAD: &[char] = &['(', '[', '{', '<', '"', '\''];
@@ -260,11 +260,7 @@ fn pick_fallback(urls: &[String]) -> Result<Option<String>> {
     if let Some(n) = c.parse::<usize>().ok().filter(|n| (1..=urls.len()).contains(n)) {
         return Ok(Some(urls[n - 1].clone()));
     }
-    Ok(urls
-        .iter()
-        .filter(|u| fuzzy_score(c, u).is_some())
-        .max_by_key(|u| fuzzy_score(c, u).unwrap_or(0))
-        .cloned())
+    Ok(fuzzy_best(urls, c, |u| u.clone()).map(|i| urls[i].clone()))
 }
 
 #[cfg(test)]

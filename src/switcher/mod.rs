@@ -171,11 +171,7 @@ fn fallback(items: Vec<Item>, snap: Option<&Snapshot>) -> Result<()> {
 }
 
 fn best_match<'a>(items: &'a [Item], query: &str) -> Option<&'a Item> {
-    items
-        .iter()
-        .filter_map(|it| fuzzy_score(query, &item_key(it)).map(|s| (s, it)))
-        .max_by_key(|(s, _)| *s)
-        .map(|(_, it)| it)
+    fuzzy_best(items, query, item_key).map(|i| &items[i])
 }
 
 // ── Interactive TUI ─────────────────────────────────────────────────────────

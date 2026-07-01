@@ -103,6 +103,32 @@ pub fn fuzzy_positions(query: &str, hay: &str) -> Option<Vec<usize>> {
     (qi == q.len()).then_some(pos)
 }
 
+/// Rank `items` against `query`, best match first, dropping non-matches. `key`
+/// yields the string each item is fuzzy-matched on (identity for plain strings).
+/// Ties break toward the earlier item. Returns indices into `items`.
+pub fn fuzzy_rank<T>(items: &[T], query: &str, key: impl Fn(&T) -> String) -> Vec<usize> {
+    let mut scored: Vec<(usize, i32)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, it)| fuzzy_score(query, &key(it)).map(|s| (i, s)))
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    scored.into_iter().map(|(i, _)| i).collect()
+}
+
+/// The single best match for `query`, or `None` if nothing matches. Scores each
+/// item once (O(n), no sort) and, consistent with [`fuzzy_rank`], breaks ties
+/// toward the earlier item.
+pub fn fuzzy_best<T>(items: &[T], query: &str, key: impl Fn(&T) -> String) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, it)| fuzzy_score(query, &key(it)).map(|s| (i, s)))
+        // strict `>` keeps the earliest item on a score tie
+        .reduce(|best, cur| if cur.1 > best.1 { cur } else { best })
+        .map(|(i, _)| i)
+}
+
 #[cfg(test)]
 mod fuzzy_tests {
     use super::*;
@@ -113,6 +139,26 @@ mod fuzzy_tests {
         assert_eq!(fuzzy_positions("AB", "xaybz"), Some(vec![1, 3]));
         assert_eq!(fuzzy_positions("", "abc"), Some(vec![]));
         assert_eq!(fuzzy_positions("xyz", "abc"), None);
+    }
+
+    #[test]
+    fn rank_orders_best_first_and_drops_nonmatches() {
+        let items = ["zzfoo", "foobar", "nope"];
+        // "foobar" (prefix match) ranks above "zzfoo"; "nope" is dropped.
+        assert_eq!(fuzzy_rank(&items, "foo", |s| s.to_string()), vec![1, 0]);
+        // empty query keeps every item in original order.
+        assert_eq!(fuzzy_rank(&items, "", |s| s.to_string()), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn best_matches_rank_head_and_breaks_ties_to_earlier() {
+        let items = ["foobar", "zzfoo", "nope"];
+        assert_eq!(fuzzy_best(&items, "foo", |s| s.to_string()), Some(0));
+        assert_eq!(fuzzy_best(&items, "xyz", |s| s.to_string()), None);
+        // identical candidates score equally → earliest index wins, matching rank().
+        let dup = ["dup", "dup"];
+        assert_eq!(fuzzy_best(&dup, "dup", |s| s.to_string()), Some(0));
+        assert_eq!(fuzzy_rank(&dup, "dup", |s| s.to_string()).first().copied(), Some(0));
     }
 }
 
@@ -224,14 +270,7 @@ impl State {
     }
 
     fn refilter(&mut self) {
-        let mut scored: Vec<(usize, i32)> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, it)| fuzzy_score(&self.query, &item_key(it)).map(|sc| (i, sc)))
-            .collect();
-        scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        self.filtered = scored.into_iter().map(|(i, _)| i).collect();
+        self.filtered = fuzzy_rank(&self.items, &self.query, item_key);
         if self.cursor >= self.filtered.len() {
             self.cursor = self.filtered.len().saturating_sub(1);
         }
