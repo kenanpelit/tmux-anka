@@ -315,11 +315,18 @@ impl State {
                 None if !self.query.is_empty() => Step::Exit(Exit::NewSession(self.query.clone())),
                 None => Step::Exit(Exit::Cancel),
             },
-            // Digit hotkey: jump straight to that row and activate it.
-            Key::Digit(n) => match self.filtered.get(n.wrapping_sub(1)) {
+            // Digit hotkey: jump straight to that row and activate it — but only
+            // when the query is empty. A non-empty query (e.g. searching a port
+            // number like "8080") types the digit instead, like any other Char.
+            Key::Digit(n) if self.query.is_empty() => match self.filtered.get(n.wrapping_sub(1)) {
                 Some(&i) => Step::Exit(Exit::Activate(self.items[i].clone())),
                 None => Step::Redraw,
             },
+            Key::Digit(n) => {
+                self.query.push(char::from_digit(n as u32, 10).unwrap_or('0'));
+                self.refilter();
+                Step::Redraw
+            }
             Key::Rename => match self.selected() {
                 Some(Item::Live(n)) | Some(Item::Snapshot(n)) => {
                     self.prompt = Some(Prompt::Rename(n.clone()));
@@ -477,6 +484,18 @@ mod apply_tests {
     fn out_of_range_digit_is_ignored() {
         let mut s = st();
         assert!(matches!(s.apply(Key::Digit(9)), Step::Redraw));
+    }
+
+    #[test]
+    fn digit_with_nonempty_query_types_instead_of_jumping() {
+        let mut s = st();
+        s.apply(Key::Char('8'));
+        s.apply(Key::Char('0'));
+        assert_eq!(s.query(), "80");
+        // Typing "8080" (ports/PIDs) must not activate a row mid-query.
+        let step = s.apply(Key::Digit(8));
+        assert!(matches!(step, Step::Redraw));
+        assert_eq!(s.query(), "808");
     }
 
     #[test]

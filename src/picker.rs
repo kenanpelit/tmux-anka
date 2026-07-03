@@ -49,51 +49,69 @@ fn run_picker(items: &[String], title: &str, full: bool) -> Result<(Hit, String)
         while let Some((maybe, used)) = term::parse_key(&buf) {
             buf.drain(..used);
             let Some(key) = maybe else { continue };
-            match key {
-                Key::Cancel => {
-                    raw.restore();
-                    return Ok((Hit::Cancel, query));
-                }
-                Key::Enter => {
-                    if let Some(&i) = filtered.get(cursor) {
-                        raw.restore();
-                        return Ok((Hit::Enter(i), query));
-                    }
-                }
-                Key::Digit(d) if d >= 1 && d - 1 < filtered.len() => {
-                    raw.restore();
-                    return Ok((Hit::Enter(filtered[d - 1]), query));
-                }
-                Key::Tab if full => {
-                    raw.restore();
-                    return Ok((Hit::Tab, query));
-                }
-                Key::Ctrl(c) if full => {
-                    if let Some(&i) = filtered.get(cursor) {
-                        raw.restore();
-                        return Ok((Hit::Ctrl(c, i), query));
-                    }
-                }
-                // bottom-anchored: best is at the bottom, so Down moves toward it
-                Key::Up if cursor + 1 < filtered.len() => cursor += 1,
-                Key::Down => cursor = cursor.saturating_sub(1),
-                Key::Char(c) => {
-                    query.push(c);
-                    filtered = refilter(items, &query);
-                    cursor = 0;
-                }
-                Key::Backspace => {
-                    query.pop();
-                    filtered = refilter(items, &query);
-                    cursor = 0;
-                }
-                _ => {}
+            if let Some(hit) = handle_key(key, items, full, &mut query, &mut cursor, &mut filtered) {
+                raw.restore();
+                return Ok((hit, query));
             }
             render(items, &filtered, cursor, &query, title);
         }
     }
     raw.restore();
     Ok((Hit::Cancel, query))
+}
+
+/// Applies one decoded key to the picker's mutable state. Returns `Some(hit)`
+/// when the picker should exit with that outcome, or `None` to keep going
+/// (the caller re-renders). Pulled out of `run_picker`'s I/O loop so it's
+/// unit-testable without a real raw-mode terminal.
+fn handle_key(
+    key: Key,
+    items: &[String],
+    full: bool,
+    query: &mut String,
+    cursor: &mut usize,
+    filtered: &mut Vec<usize>,
+) -> Option<Hit> {
+    match key {
+        Key::Cancel => Some(Hit::Cancel),
+        Key::Enter => filtered.get(*cursor).map(|&i| Hit::Enter(i)),
+        // Digit hotkey: jump straight to that row — but only when the query
+        // is empty. A non-empty query (e.g. searching a port like "8080")
+        // types the digit instead, like any other Char.
+        Key::Digit(d) if query.is_empty() && d >= 1 && d - 1 < filtered.len() => {
+            Some(Hit::Enter(filtered[d - 1]))
+        }
+        Key::Digit(d) if !query.is_empty() => {
+            query.push(char::from_digit(d as u32, 10).unwrap_or('0'));
+            *filtered = refilter(items, query);
+            *cursor = 0;
+            None
+        }
+        Key::Tab if full => Some(Hit::Tab),
+        Key::Ctrl(c) if full => filtered.get(*cursor).map(|&i| Hit::Ctrl(c, i)),
+        // bottom-anchored: best is at the bottom, so Down moves toward it
+        Key::Up if *cursor + 1 < filtered.len() => {
+            *cursor += 1;
+            None
+        }
+        Key::Down => {
+            *cursor = cursor.saturating_sub(1);
+            None
+        }
+        Key::Char(c) => {
+            query.push(c);
+            *filtered = refilter(items, query);
+            *cursor = 0;
+            None
+        }
+        Key::Backspace => {
+            query.pop();
+            *filtered = refilter(items, query);
+            *cursor = 0;
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Interactive pick; returns the chosen index into `items`, or `None` on cancel.
@@ -219,4 +237,32 @@ fn render(items: &[String], filtered: &[usize], cursor: usize, query: &str, titl
 
     print!("{out}");
     io::stdout().flush().ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digit_jumps_when_query_empty() {
+        let items = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut query = String::new();
+        let mut cursor = 0usize;
+        let mut filtered: Vec<usize> = vec![0, 1, 2];
+        let hit = handle_key(Key::Digit(3), &items, false, &mut query, &mut cursor, &mut filtered);
+        assert_eq!(hit, Some(Hit::Enter(2)));
+        assert_eq!(query, ""); // unchanged
+    }
+
+    #[test]
+    fn digit_types_into_nonempty_query_instead_of_jumping() {
+        // Searching a port number ("8080") must not activate a row mid-query.
+        let items = vec!["808".to_string(), "other".to_string()];
+        let mut query = "80".to_string();
+        let mut cursor = 0usize;
+        let mut filtered: Vec<usize> = vec![0, 1];
+        let hit = handle_key(Key::Digit(8), &items, false, &mut query, &mut cursor, &mut filtered);
+        assert_eq!(hit, None);
+        assert_eq!(query, "808");
+    }
 }
