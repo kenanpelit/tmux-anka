@@ -98,6 +98,16 @@ bind_anka "$SEARCH_KEY"      run-shell -b "'$BINARY' search --pane '#{pane_id}' 
 # upgraded from that far back, run `tmux set-hook -gu session-closed` once.)
 # Indexed hook slot [27]: coexists with user/plugin client-detached hooks
 # instead of clobbering the global slot.
+#
+# anka <=0.12.x set this hook unindexed, which tmux stores at [0] and keeps
+# alongside [27] — both would fire on every detach. Unset [0] only when it is
+# recognizably ours, so a genuine user hook there survives. (Note:
+# `show-hooks -g` without a hook name lists only hook NAMES; the values need
+# the hook asked for explicitly.)
+legacy_hook="$(tmux show-hooks -g client-detached 2>/dev/null | grep '^client-detached\[0\] ' || true)"
+case "$legacy_hook" in
+    *anka*client-detached*) tmux set-hook -gu 'client-detached[0]' ;;
+esac
 tmux set-hook -g 'client-detached[27]' "run-shell -b \"'$BINARY' hook client-detached\""
 
 # ── Optional interval daemon ─────────────────────────────────────────────────
