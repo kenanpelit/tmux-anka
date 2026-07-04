@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install tmux + shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux shellcheck
+
+      # NOTE: no `cargo fmt --check` — the tree is not rustfmt-clean today;
+      # add it here once a dedicated fmt pass lands.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+      - name: Shellcheck
+        run: shellcheck anka.tmux scripts/*.sh
