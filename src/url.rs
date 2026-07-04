@@ -170,11 +170,20 @@ fn run_pane(pane_id: &str) -> Result<()> {
         return Ok(());
     }
     // Stash the text in a file (keeps the popup's stdin free for keystrokes) and
-    // reopen ourselves in the popup for the interactive picker.
-    let tmp = std::env::temp_dir().join(format!("anka-url-{}.txt", pane_id.trim_start_matches('%')));
-    std::fs::write(&tmp, &text).with_context(|| format!("writing {}", tmp.display()))?;
+    // reopen ourselves in the popup for the interactive picker. The file is
+    // private (0600, O_EXCL, unique name under $XDG_RUNTIME_DIR or
+    // <anka-dir>/tmp): captured pane text must never sit in a world-readable,
+    // predictably named /tmp path a symlink could be pre-planted at.
+    let (tmp, mut f) = crate::store::create_secure_tmp("anka-url")?;
+    f.write_all(text.as_bytes())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    drop(f);
     let exe = std::env::current_exe()?;
-    let cmd = format!("{} url {}", exe.display(), tmp.display());
+    let cmd = format!(
+        "{} url {}",
+        crate::process::shell_quote(&exe.display().to_string()),
+        crate::process::shell_quote(&tmp.display().to_string())
+    );
     crate::tmux::run_ok(&["display-popup", "-w", "70%", "-h", "60%", "-E", &cmd]);
     let _ = std::fs::remove_file(&tmp);
     Ok(())

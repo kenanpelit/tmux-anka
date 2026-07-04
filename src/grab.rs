@@ -101,10 +101,17 @@ fn launch(pane: &str) -> Result<()> {
         crate::tmux::run_ok(&["display-message", "anka: nothing to grab"]);
         return Ok(());
     }
-    let tmp = std::env::temp_dir().join(format!("anka-grab-{}.txt", pane.trim_start_matches('%')));
-    std::fs::write(&tmp, &text)?;
+    // Private scratch file (0600, O_EXCL, unique name) — see url.rs.
+    let (tmp, mut f) = crate::store::create_secure_tmp("anka-grab")?;
+    std::io::Write::write_all(&mut f, text.as_bytes())?;
+    drop(f);
     let exe = std::env::current_exe()?;
-    let cmd = format!("{} grab {} --pane {}", exe.display(), tmp.display(), pane);
+    let cmd = format!(
+        "{} grab {} --pane {}",
+        crate::process::shell_quote(&exe.display().to_string()),
+        crate::process::shell_quote(&tmp.display().to_string()),
+        pane
+    );
     crate::tmux::run_ok(&["display-popup", "-w", "70%", "-h", "70%", "-E", &cmd]);
     let _ = std::fs::remove_file(&tmp);
     Ok(())

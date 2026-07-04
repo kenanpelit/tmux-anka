@@ -248,7 +248,27 @@ pub fn create_secure_tmp(prefix: &str) -> Result<(PathBuf, fs::File)> {
     let dir = runtime_tmp_dir();
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    sweep_dead_scratch(&dir);
     create_secure_tmp_in(&dir, prefix)
+}
+
+/// Sweep `anka-*-<pid>-<n>.txt` scratch files whose owning process is gone.
+/// The popup deletes its own file on the normal path, but a killed popup (or
+/// tmux server exit mid-pick) leaks one; the next invocation cleans up here.
+fn sweep_dead_scratch(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(stem) = name.strip_prefix("anka-").and_then(|n| n.strip_suffix(".txt")) else {
+            continue;
+        };
+        let mut it = stem.rsplit('-');
+        let (Some(_counter), Some(pid)) = (it.next(), it.next()) else { continue };
+        if pid.parse::<u32>().ok().is_some_and(|p| !pid_alive(p)) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn create_secure_tmp_in(dir: &Path, prefix: &str) -> Result<(PathBuf, fs::File)> {
@@ -452,6 +472,22 @@ mod tests {
 
         assert_ne!(path, planted, "must skip the pre-planted name rather than open through it");
         assert!(!victim.exists(), "must never follow the planted symlink to its target");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sweep_dead_scratch_removes_dead_owner_files_only() {
+        let dir = scratch_dir("sweep-scratch");
+        let dead = dir.join(format!("anka-url-{}-0.txt", u32::MAX));
+        let live = dir.join(format!("anka-grab-{}-0.txt", std::process::id()));
+        let unrelated = dir.join("notes.txt");
+        fs::write(&dead, "x").unwrap();
+        fs::write(&live, "x").unwrap();
+        fs::write(&unrelated, "x").unwrap();
+        sweep_dead_scratch(&dir);
+        assert!(!dead.exists(), "dead-owner scratch file must be swept");
+        assert!(live.exists(), "live-owner scratch file must survive");
+        assert!(unrelated.exists(), "non-anka files must never be touched");
         fs::remove_dir_all(&dir).ok();
     }
 
