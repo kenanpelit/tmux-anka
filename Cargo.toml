@@ -2,6 +2,7 @@
 name = "anka"
 version = "0.12.7"
 edition = "2021"
+rust-version = "1.85"
 description = "Freeze and resurrect tmux sessions, exactly."
 license = "MIT"
 repository = "https://github.com/kenanpelit/tmux-anka"
