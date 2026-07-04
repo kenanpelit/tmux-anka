@@ -59,42 +59,46 @@ POPUP_H="$(opt @anka-popup-height)"; POPUP_H="${POPUP_H:-75%}"
 
 # ── Keybindings ──────────────────────────────────────────────────────────────
 # Set any @anka-*-key to 'none' to skip that binding (keep your own).
+# $BINARY is single-quoted inside every run-shell/display-popup string so a
+# plugin path containing spaces survives the shell that executes it. Inside
+# tmux the binary reports results via display-message itself and keeps stdout
+# quiet, so plain `run-shell -b` is enough (no view to dismiss, no >/dev/null).
 bind_anka() { [ "$1" = none ] && return 0; tmux bind-key "$@"; }
 
-# Save/restore arka planda çalışır (run-shell -b). run-shell, komutun stdout'unu
-# Enter/q ile kapatılması gereken bir view'da gösterir; bu yüzden anka'nın stdout'unu
-# (>/dev/null) susturup sonucu kısa bir display-message ile mesaj satırında gösteriyoruz
-# (anka ayrıca @anka_status widget'ını da günceller). stderr açık kalır ki gerçek
-# hatalar yine görünebilsin.
-bind_anka "$SAVE_KEY"    run-shell -b "$BINARY save >/dev/null && tmux display-message 'anka: snapshot saved ✔'"
-bind_anka "$RESTORE_KEY" run-shell -b "$BINARY restore >/dev/null && tmux display-message 'anka: snapshot restored ✔'"
-bind_anka "$PICK_KEY"    display-popup -w "$POPUP_W" -h "$POPUP_H" -E "$BINARY pick"
+bind_anka "$SAVE_KEY"    run-shell -b "'$BINARY' save"
+bind_anka "$RESTORE_KEY" run-shell -b "'$BINARY' restore"
+bind_anka "$PICK_KEY"    display-popup -w "$POPUP_W" -h "$POPUP_H" -E "'$BINARY' pick"
 
 # ── Session management (replaces tmux-sessionx + tmux-sessionist) ─────────────
 # Switcher: an interactive popup over live + snapshot + zoxide sessions.
-bind_anka "$SWITCH_KEY"      display-popup -w "$POPUP_W" -h "$POPUP_H" -E "$BINARY switch"
-# Sessionist-style quick actions. command-prompt feeds the name as %%.
-bind_anka "$NEW_KEY"         command-prompt -p "New session:" "run-shell \"$BINARY session new '%%'\""
-bind_anka "$KILL_KEY"        run-shell "$BINARY session kill"
-bind_anka "$PROMOTE_KEY"     command-prompt -p "Promote pane to session:" "run-shell \"$BINARY session promote '%%'\""
-bind_anka "$SWITCH_NAME_KEY" command-prompt -p "Switch to session:" "run-shell \"$BINARY session switch '%%'\""
-bind_anka "$LAST_KEY"        run-shell "$BINARY session last"
+bind_anka "$SWITCH_KEY"      display-popup -w "$POPUP_W" -h "$POPUP_H" -E "'$BINARY' switch"
+# Sessionist-style quick actions. new/promote/switch prompt for the name
+# themselves (--prompt: a raw-mode inline prompt in a small popup), so typed
+# input never rides through a shell string — no command-prompt '%%' injection.
+bind_anka "$NEW_KEY"         display-popup -w 40 -h 3 -E "'$BINARY' session new --prompt"
+bind_anka "$KILL_KEY"        run-shell -b "'$BINARY' session kill"
+bind_anka "$PROMOTE_KEY"     display-popup -w 40 -h 3 -E "'$BINARY' session promote --prompt"
+bind_anka "$SWITCH_NAME_KEY" display-popup -w 40 -h 3 -E "'$BINARY' session switch --prompt"
+bind_anka "$LAST_KEY"        run-shell -b "'$BINARY' session last"
 
-# Action menu (replaces tmux-fzf). run-shell captures the invoking client/session
-# (#{...} expands here, not in display-popup -E); anka reopens itself in a popup.
-bind_anka "$MENU_KEY"        run-shell -b "$BINARY menu --client '#{client_name}' --session '#{session_name}'"
+# Action menu (replaces tmux-fzf). run-shell captures the invoking client
+# (#{...} expands here, not in display-popup -E); anka reopens itself in a
+# popup. Client names are tty paths (safe charset) but stay single-quoted.
+bind_anka "$MENU_KEY"        run-shell -b "'$BINARY' menu --client '#{client_name}'"
 
 # Screen-text tools (replace extrakto + tmux-fuzzback). run-shell captures the
-# pane (#{pane_id} expands here, not in display-popup -E) → anka picker popup.
-bind_anka "$GRAB_KEY"        run-shell -b "$BINARY grab --pane '#{pane_id}'"
-bind_anka "$SEARCH_KEY"      run-shell -b "$BINARY search --pane '#{pane_id}'"
+# pane/client (#{...} expands here, not in display-popup -E) → anka picker popup.
+bind_anka "$GRAB_KEY"        run-shell -b "'$BINARY' grab --pane '#{pane_id}' --client '#{client_name}'"
+bind_anka "$SEARCH_KEY"      run-shell -b "'$BINARY' search --pane '#{pane_id}' --client '#{client_name}'"
 
 # ── Event-driven auto-save (native hooks; no status-interval piggyback) ───────
 # NOT session-closed: it fires after the session is already gone, so saving there
 # prunes it from the snapshot — and cascades on logout/shutdown as every session
-# tears down, losing them after a reboot. Unset it (clears any stale hook too).
-tmux set-hook -gu session-closed
-tmux set-hook -g client-detached  "run-shell \"$BINARY hook client-detached >/dev/null\""
+# tears down, losing them after a reboot. (Anka <0.9.4 set it itself; if you
+# upgraded from that far back, run `tmux set-hook -gu session-closed` once.)
+# Indexed hook slot [27]: coexists with user/plugin client-detached hooks
+# instead of clobbering the global slot.
+tmux set-hook -g 'client-detached[27]' "run-shell -b \"'$BINARY' hook client-detached\""
 
 # ── Optional interval daemon ─────────────────────────────────────────────────
 INTERVAL="$(opt @anka-save-interval)"; INTERVAL="${INTERVAL:-10}"
