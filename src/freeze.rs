@@ -13,7 +13,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use crate::model::{Pane, RestoreKind, Snapshot};
+use crate::model::{Client, Pane, RestoreKind, Snapshot};
 use crate::process::shell_quote;
 use crate::restore;
 use crate::store;
@@ -33,7 +33,10 @@ fn blueprint_script(name: &str) -> PathBuf {
 /// Freeze snapshot `name` (default: `last`) into a blueprint of the same name.
 pub fn freeze(name: Option<&str>, script: bool) -> Result<()> {
     let src = match name {
-        Some(n) => n.to_string(),
+        Some(n) => {
+            store::validate_name(n)?;
+            n.to_string()
+        }
         None => store::last_name().context("no snapshot to freeze (no `last`)")?,
     };
     let mut snap = restore::load_snapshot(&src)?;
@@ -63,6 +66,7 @@ pub fn up(name: &str) -> Result<()> {
     if !crate::tmux::server_running() {
         bail!("no tmux server running");
     }
+    store::validate_name(name)?;
     let path = blueprint_json(name);
     if !path.is_file() {
         bail!(
@@ -72,17 +76,17 @@ pub fn up(name: &str) -> Result<()> {
     }
     let data = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let snap: Snapshot =
-        serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))?;
+        crate::model::parse_snapshot(&data).with_context(|| format!("in {}", path.display()))?;
     let n = restore::restore_snapshot(&snap)?;
     println!("launched blueprint '{name}' ({n} sessions)");
     Ok(())
 }
 
 /// Drop volatile, machine-specific fields so the blueprint is a clean,
-/// hand-editable template (no pids, scrollback, or history counts).
+/// hand-editable template (no pids, scrollback, history counts, or the
+/// saving client's terminal size).
 fn declutter(snap: &mut Snapshot) {
-    snap.client.active_session = None;
-    snap.client.last_session = None;
+    snap.client = Client::default();
     for s in &mut snap.sessions {
         for w in &mut s.windows {
             for p in &mut w.panes {
@@ -104,8 +108,16 @@ fn launch_cmd(p: &Pane) -> Option<String> {
 }
 
 /// Render a self-contained POSIX shell script that recreates the layout with
-/// raw tmux commands — no `anka` needed to run it. Best-effort: pane targeting
-/// follows the recorded indices.
+/// raw tmux commands — no `anka` needed to run it.
+///
+/// Every created window/pane's id is captured into a shell variable
+/// (`-P -F '#{pane_id}'`) and all later targeting (`split-window`,
+/// `select-layout`, `send-keys`) uses those ids — never the recorded numeric
+/// indices, which under a non-default `base-index`/`pane-base-index` or
+/// non-contiguous recorded indices would miss and, with `set -e`, abort the
+/// script. Windows are still *created at* their recorded indices
+/// (`new-window -t sess:idx`, plus a `move-window` for the first window that
+/// `new-session` pins to base-index) so prefix+N muscle memory survives.
 fn render_script(snap: &Snapshot) -> String {
     let mut out = String::new();
     out.push_str("#!/bin/sh\n");
@@ -120,27 +132,40 @@ fn render_script(snap: &Snapshot) -> String {
             panes.sort_by_key(|p| p.index);
             let wname = shell_quote(&w.name);
             let first_cwd = shell_quote(panes.first().map(|p| p.cwd.as_str()).unwrap_or("."));
+            let wtarget = shell_quote(&format!("{}:{}", s.name, w.index));
             if wi == 0 {
-                out.push_str(&format!("tmux new-session -d -s {sq} -n {wname} -c {first_cwd}\n"));
+                out.push_str(&format!(
+                    "w=$(tmux new-session -d -P -F '#{{pane_id}}' -s {sq} -n {wname} -c {first_cwd})\n"
+                ));
+                // new-session pinned the window at base-index; move it to the
+                // recorded index. A self-move errors ("index in use") when
+                // they already coincide — ignore just that.
+                out.push_str(&format!(
+                    "tmux move-window -s \"$w\" -t {wtarget} 2>/dev/null || true\n"
+                ));
             } else {
-                out.push_str(&format!("tmux new-window -t {sq} -n {wname} -c {first_cwd}\n"));
+                out.push_str(&format!(
+                    "w=$(tmux new-window -d -P -F '#{{pane_id}}' -t {wtarget} -n {wname} -c {first_cwd})\n"
+                ));
             }
-            for p in panes.iter().skip(1) {
-                out.push_str(&format!("tmux split-window -t {sq} -c {}\n", shell_quote(&p.cwd)));
+            let mut pane_vars = vec!["$w".to_string()];
+            for (pi, p) in panes.iter().enumerate().skip(1) {
+                out.push_str(&format!(
+                    "p{pi}=$(tmux split-window -d -P -F '#{{pane_id}}' -t \"$w\" -c {})\n",
+                    shell_quote(&p.cwd)
+                ));
+                pane_vars.push(format!("$p{pi}"));
             }
             if !w.layout.is_empty() {
                 out.push_str(&format!(
-                    "tmux select-layout -t {sq}:{} {}\n",
-                    w.index,
+                    "tmux select-layout -t \"$w\" {}\n",
                     shell_quote(&w.layout)
                 ));
             }
-            for (pi, p) in panes.iter().enumerate() {
+            for (p, var) in panes.iter().zip(pane_vars.iter()) {
                 if let Some(cmd) = launch_cmd(p) {
                     out.push_str(&format!(
-                        "tmux send-keys -t {sq}:{}.{} {} Enter\n",
-                        w.index,
-                        pi,
+                        "tmux send-keys -t \"{var}\" {} Enter\n",
                         shell_quote(&cmd)
                     ));
                 }

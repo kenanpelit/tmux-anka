@@ -9,6 +9,7 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 
+use crate::capture::US;
 use crate::config::Config;
 use crate::model::{Pane, RestoreKind, Session, Snapshot, Window};
 use crate::store;
@@ -31,12 +32,19 @@ pub fn restore(name: Option<&str>) -> Result<()> {
 pub fn restore_snapshot(snap: &Snapshot) -> Result<usize> {
     let cfg = Config::load();
     let existing = existing_sessions();
+    let size = client_size(snap);
     let mut restored = 0usize;
     for session in &snap.sessions {
-        if existing.contains(&session.name) && !cfg.restore_overwrite {
-            continue; // non-destructive: never clobber a live session
+        if existing.contains(&session.name) {
+            if !cfg.restore_overwrite {
+                continue; // non-destructive: never clobber a live session
+            }
+            // Overwrite mode: kill the live session first — without this,
+            // `new-session -s <name>` dies with "duplicate session" and
+            // aborts the whole restore. `=` pins an exact-name match.
+            tmux::run_ok(&["kill-session", "-t", &format!("={}", session.name)]);
         }
-        restore_session(session, &cfg)
+        restore_session(session, &cfg, size)
             .with_context(|| format!("restoring session '{}'", session.name))?;
         restored += 1;
     }
@@ -55,10 +63,14 @@ pub fn restore_one(snap: &Snapshot, session_name: &str) -> Result<bool> {
         .iter()
         .find(|s| s.name == session_name)
         .with_context(|| format!("session '{session_name}' not in snapshot"))?;
-    if existing_sessions().contains(&session.name) && !cfg.restore_overwrite {
-        return Ok(false); // already live
+    if existing_sessions().contains(&session.name) {
+        if !cfg.restore_overwrite {
+            return Ok(false); // already live
+        }
+        // Overwrite mode: replace the live session (see restore_snapshot).
+        tmux::run_ok(&["kill-session", "-t", &format!("={}", session.name)]);
     }
-    restore_session(session, &cfg)
+    restore_session(session, &cfg, client_size(snap))
         .with_context(|| format!("restoring session '{}'", session.name))?;
     tmux::run_ok(&["switch-client", "-t", &session.name]);
     Ok(true)
@@ -85,7 +97,7 @@ pub fn autostart() -> Result<()> {
     Ok(())
 }
 
-fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
+fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<()> {
     let mut windows: Vec<&Window> = session.windows.iter().collect();
     windows.sort_by_key(|w| w.index);
 
@@ -97,16 +109,19 @@ fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
         let first = panes.first().copied();
         let first_cwd = first.map(|p| p.cwd.clone()).unwrap_or_else(|| ".".to_string());
 
-        // Create the window's first pane.
+        // Create the window's first pane — at the window's *recorded* index,
+        // so non-contiguous layouts (1,3,7) and prefix+N muscle memory
+        // survive a restore instead of collapsing to 1,2,3.
         let mut v: Vec<String> = Vec::new();
         if wi == 0 {
-            v.extend(
-                ["new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session.name.as_str()]
-                    .map(String::from),
-            );
+            // new-session places the first window at base-index; also report
+            // that index back so we can move-window it to the recorded one.
+            v.extend(["new-session", "-d", "-P", "-F"].map(String::from));
+            v.push(format!("#{{pane_id}}{US}#{{window_index}}"));
+            v.extend(["-s", session.name.as_str()].map(String::from));
         } else {
             v.extend(["new-window", "-d", "-P", "-F", "#{pane_id}", "-t"].map(String::from));
-            v.push(format!("{}:", session.name));
+            v.push(format!("{}:{}", session.name, w.index));
         }
         if !w.name.is_empty() {
             v.push("-n".into());
@@ -115,9 +130,24 @@ fn restore_session(session: &Session, cfg: &Config) -> Result<()> {
         v.push("-c".into());
         v.push(first_cwd);
         if wi == 0 {
-            v.extend(["-x", "200", "-y", "50"].map(String::from));
+            v.extend(["-x".into(), size.0.to_string(), "-y".into(), size.1.to_string()]);
         }
-        let first_pane_id = run_str(&v)?;
+        let out = run_str(&v)?;
+        let first_pane_id = if wi == 0 {
+            let (pane_id, created_idx) = out.split_once(US).unwrap_or((out.as_str(), ""));
+            if created_idx.parse::<u32>().ok() != Some(w.index) {
+                tmux::run_ok(&[
+                    "move-window",
+                    "-s",
+                    pane_id,
+                    "-t",
+                    &format!("{}:{}", session.name, w.index),
+                ]);
+            }
+            pane_id.to_string()
+        } else {
+            out
+        };
         let mut pane_ids = vec![first_pane_id.clone()];
 
         // Remaining panes: split off the first pane (plain shells), fix geometry below.
@@ -189,9 +219,19 @@ fn nvim_launch(p: &Pane, cfg: &Config) -> String {
     p.restore.command.clone().unwrap_or_else(|| "nvim".to_string())
 }
 
+/// The `-x`/`-y` geometry for a restored session's first window: the client
+/// size recorded in the snapshot, falling back to the historical 200x50 when
+/// the snapshot predates the fields or was saved with no client attached.
+fn client_size(snap: &Snapshot) -> (u32, u32) {
+    (snap.client.width.unwrap_or(200), snap.client.height.unwrap_or(50))
+}
+
 fn resolve_name(name: Option<&str>) -> Result<String> {
     match name {
-        Some(n) => Ok(n.to_string()),
+        Some(n) => {
+            store::validate_name(n)?;
+            Ok(n.to_string())
+        }
         None => store::last_name().context("no snapshot to restore (no `last`)"),
     }
 }
@@ -200,7 +240,7 @@ pub fn load_snapshot(name: &str) -> Result<Snapshot> {
     let path = store::snapshot_json(name);
     let data =
         fs::read(&path).with_context(|| format!("reading snapshot {}", path.display()))?;
-    serde_json::from_slice(&data).with_context(|| format!("parsing snapshot {}", path.display()))
+    crate::model::parse_snapshot(&data).with_context(|| format!("in {}", path.display()))
 }
 
 fn existing_sessions() -> Vec<String> {
@@ -217,7 +257,7 @@ fn run_str(args: &[String]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RestoreAction;
+    use crate::model::{Client, RestoreAction};
 
     fn cfg(strategy_nvim: &str) -> Config {
         Config {
@@ -274,5 +314,23 @@ mod tests {
     fn nvim_falls_back_to_bare_editor() {
         let p = nvim_pane("/no/such/anka/dir", None);
         assert_eq!(nvim_launch(&p, &cfg("session")), "nvim");
+    }
+
+    // ── client-size geometry (fix: hardcoded -x 200 -y 50) ──────────────────
+
+    #[test]
+    fn client_size_uses_recorded_dimensions_with_fallback() {
+        let mut snap = Snapshot {
+            schema: crate::model::SCHEMA,
+            anka_version: "t".to_string(),
+            saved_at: "t".to_string(),
+            client: Client::default(),
+            sessions: vec![],
+        };
+        // No client attached at save time (or an old snapshot): fixed default.
+        assert_eq!(client_size(&snap), (200, 50));
+        snap.client.width = Some(120);
+        snap.client.height = Some(40);
+        assert_eq!(client_size(&snap), (120, 40));
     }
 }

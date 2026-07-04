@@ -14,7 +14,7 @@ use crate::tmux;
 /// Field separator (US, 0x1f) — avoids tab/comma injection in titles/paths.
 /// A raw newline embedded in a free-text field (cwd/title) still tears the
 /// `-F` record across physical lines; `records()` below tolerates that.
-const US: char = '\u{1f}';
+pub(crate) const US: char = '\u{1f}';
 
 pub fn save(name: Option<&str>) -> Result<()> {
     if !tmux::server_running() {
