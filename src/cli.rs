@@ -37,6 +37,9 @@ pub enum Cmd {
         pane: Option<String>,
         /// File with pane text to pick from (default: stdin) — used inside the popup
         source: Option<String>,
+        /// Invoking client name (#{client_name}) — the popup opens on it
+        #[arg(long)]
+        client: Option<String>,
     },
     /// Extract tokens from the pane → copy/paste/open (extrakto-style)
     Grab {
@@ -45,6 +48,9 @@ pub enum Cmd {
         pane: Option<String>,
         /// File with captured pane text — used inside the popup
         source: Option<String>,
+        /// Invoking client name (#{client_name}) — the popup opens on it
+        #[arg(long)]
+        client: Option<String>,
     },
     /// Fuzzy-search the scrollback → jump to the line + highlight (fuzzback-style)
     Search {
@@ -53,6 +59,9 @@ pub enum Cmd {
         pane: Option<String>,
         /// File with captured scrollback — used inside the popup
         source: Option<String>,
+        /// Invoking client name (#{client_name}) — the popup opens on it
+        #[arg(long)]
+        client: Option<String>,
     },
     /// Copy stdin to the system clipboard (wayland/X/OSC52). For copy-pipe.
     Clip {
@@ -79,6 +88,8 @@ pub enum Cmd {
     },
     /// Print the status-bar widget text
     Status,
+    /// Check the environment/install (PASS/FAIL lines; exit 1 on any FAIL)
+    Doctor,
     /// Run the interval auto-save daemon
     Daemon,
     /// Internal: event-driven save trigger from tmux hooks
@@ -92,13 +103,32 @@ pub enum Cmd {
 #[derive(Subcommand)]
 pub enum SessionCmd {
     /// Create or switch to a named session
-    New { name: String },
+    New {
+        #[arg(required_unless_present = "prompt")]
+        name: Option<String>,
+        /// Ask for the name interactively (raw-mode line prompt in a popup;
+        /// reads one stdin line off a tty). Empty/ESC cancels silently.
+        #[arg(long)]
+        prompt: bool,
+    },
     /// Kill the current session, switching away first
     Kill,
     /// Move the current pane into a new session
-    Promote { name: String },
+    Promote {
+        #[arg(required_unless_present = "prompt")]
+        name: Option<String>,
+        /// Ask for the name interactively (see `session new --prompt`)
+        #[arg(long)]
+        prompt: bool,
+    },
     /// Switch to a session by name
-    Switch { name: String },
+    Switch {
+        #[arg(required_unless_present = "prompt")]
+        name: Option<String>,
+        /// Ask for the name interactively (see `session new --prompt`)
+        #[arg(long)]
+        prompt: bool,
+    },
     /// Switch to the last session
     Last,
     /// Rename the current session

@@ -42,7 +42,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn lock_path() -> PathBuf {
+pub(crate) fn lock_path() -> PathBuf {
     store::base_dir().join("daemon.lock")
 }
 
@@ -83,8 +83,9 @@ fn acquire_lock(lock: &Path) -> bool {
 }
 
 /// True only when the pidfile's pid is a live process whose `/proc/<pid>/comm`
-/// is `anka` (i.e. really one of us, not a recycled pid).
-fn lockfile_names_live_anka(lock: &Path) -> bool {
+/// is `anka` (i.e. really one of us, not a recycled pid). Also used by
+/// `anka doctor` to classify the lock as live vs stale.
+pub(crate) fn lockfile_names_live_anka(lock: &Path) -> bool {
     let Some(pid) = fs::read_to_string(lock)
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())

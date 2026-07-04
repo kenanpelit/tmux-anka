@@ -1,9 +1,10 @@
 //! `anka menu` — native action menu (replaces tmux-fzf).
 //!
-//! `prefix+F` runs a `run-shell` that captures `#{client_name}`/`#{session_name}`
-//! (formats expand there, not in `display-popup -E`); anka then reopens itself in
-//! a popup running the picker. The picker → category → target → action flow
-//! targets the *invoking* client via `switch-client -c` / `command-prompt -t`.
+//! `prefix+F` runs a `run-shell` that captures `#{client_name}` (formats
+//! expand there, not in `display-popup -E`); anka then reopens itself in a
+//! popup (on that client) running the picker. The picker → category → target
+//! → action flow targets the *invoking* client via `switch-client -c` /
+//! `command-prompt -t`, and resolves the client's active pane for `send-keys`.
 
 use anyhow::Result;
 
@@ -140,12 +141,26 @@ pub fn command_argv(client: &str, cmd: &str) -> Vec<String> {
         format!("{cmd} %%"),
     ]
 }
-pub fn keybinding_argv(client: &str, target: &str, prefix: &str) -> Vec<String> {
+/// Replay a bound key into a *pane*. tmux's `send-keys -t` resolves panes,
+/// never client names — targeting the captured `#{client_name}` was a silent
+/// no-op; the caller resolves the client's active pane first (see
+/// [`pane_of_client_argv`]).
+pub fn keybinding_argv(pane: &str, target: &str, prefix: &str) -> Vec<String> {
     let (table, key) = target.split_once(US).unwrap_or(("root", target));
     if table == "prefix" {
-        v(&["send-keys", "-t", client, prefix, key])
+        v(&["send-keys", "-t", pane, prefix, key])
     } else {
-        v(&["send-keys", "-t", client, key])
+        v(&["send-keys", "-t", pane, key])
+    }
+}
+
+/// Resolve a client's active pane id: `display-message -t` *does* accept a
+/// client (unlike `send-keys -t`). Empty client → the current context.
+pub fn pane_of_client_argv(client: &str) -> Vec<String> {
+    if client.is_empty() {
+        v(&["display-message", "-p", "#{pane_id}"])
+    } else {
+        v(&["display-message", "-p", "-t", client, "#{pane_id}"])
     }
 }
 pub fn kill_process_cmd(pid: &str) -> Vec<String> {
@@ -154,9 +169,9 @@ pub fn kill_process_cmd(pid: &str) -> Vec<String> {
 
 // ── Runtime flow ─────────────────────────────────────────────────────────────
 
-pub fn run(run: bool, client: Option<&str>, session: Option<&str>) -> Result<()> {
+pub fn run(run: bool, client: Option<&str>) -> Result<()> {
     if !run {
-        return launch_popup(client, session);
+        return launch_popup(client);
     }
     let client = client.unwrap_or("");
     let cats = ["command", "keybinding", "process", "window", "pane"];
@@ -174,26 +189,35 @@ pub fn run(run: bool, client: Option<&str>, session: Option<&str>) -> Result<()>
     }
 }
 
-fn launch_popup(client: Option<&str>, session: Option<&str>) -> Result<()> {
+fn launch_popup(client: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe()?;
-    let mut cmd = format!("{} menu --run", exe.display());
+    // The exe path is interpolated into a shell string: quote it, or a plugin
+    // path containing spaces breaks the relaunch.
+    let mut cmd = format!("{} menu --run", shell_quote(&exe.display().to_string()));
     if let Some(c) = client {
         cmd.push_str(&format!(" --client {}", shell_quote(c)));
     }
-    if let Some(s) = session {
-        cmd.push_str(&format!(" --session {}", shell_quote(s)));
+    let mut argv = vec!["display-popup", "-w", "60%", "-h", "50%"];
+    // Open the popup on the invoking client, not whichever client tmux picks.
+    if let Some(c) = client {
+        argv.extend(["-c", c]);
     }
-    tmux::run_ok(&["display-popup", "-w", "60%", "-h", "50%", "-E", &cmd]);
+    argv.extend(["-E", &cmd]);
+    tmux::run_ok(&argv);
     Ok(())
 }
 
 fn notify(msg: &str) {
-    tmux::run_ok(&["display-message", msg]);
+    crate::notify::info(msg);
 }
 
+/// Run a built tmux action argv — reporting failure instead of swallowing it
+/// (a bad target used to vanish with the popup).
 fn run_argv(argv: &[String]) {
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    tmux::run_ok(&refs);
+    if let Err(e) = tmux::run(&refs) {
+        crate::notify::error(&format!("{e:#}"));
+    }
 }
 
 fn labels_of(items: &[Item]) -> Vec<String> {
@@ -209,7 +233,7 @@ fn category_command(client: &str) -> Result<()> {
     let out = tmux::run(&["list-commands", "-F", "#{command_list_name}"]).unwrap_or_default();
     let items = parse_commands(&out);
     if items.is_empty() {
-        notify("anka: no commands");
+        notify("no commands");
         return Ok(());
     }
     if let Some(i) = picker::pick(&labels_of(&items), "command")? {
@@ -226,13 +250,22 @@ fn category_keybinding(client: &str) -> Result<()> {
         items.extend(parse_keys(&out, table));
     }
     if items.is_empty() {
-        notify("anka: no key bindings");
+        notify("no key bindings");
         return Ok(());
     }
     if let Some(i) = picker::pick(&labels_of(&items), "keybinding")? {
-        run_argv(&keybinding_argv(client, &items[i].target, &prefix));
+        // send-keys needs a pane target; resolve the invoking client's
+        // active pane (targeting the client name was a silent no-op).
+        let pane = resolve_client_pane(client);
+        run_argv(&keybinding_argv(&pane, &items[i].target, &prefix));
     }
     Ok(())
+}
+
+fn resolve_client_pane(client: &str) -> String {
+    let argv = pane_of_client_argv(client);
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    tmux::run(&refs).unwrap_or_default()
 }
 
 fn category_process() -> Result<()> {
@@ -243,7 +276,7 @@ fn category_process() -> Result<()> {
         .unwrap_or_default();
     let items = parse_processes(&out);
     if items.is_empty() {
-        notify("anka: no processes");
+        notify("no processes");
         return Ok(());
     }
     if let Some(i) = picker::pick(&labels_of(&items), "process (kill)")? {
@@ -257,7 +290,7 @@ fn category_window(client: &str) -> Result<()> {
     let out = tmux::run(&["list-windows", "-a", "-F", WIN_FMT]).unwrap_or_default();
     let items = parse_windows(&out);
     if items.is_empty() {
-        notify("anka: no windows");
+        notify("no windows");
         return Ok(());
     }
     let Some(i) = picker::pick(&labels_of(&items), "window")? else {
@@ -281,7 +314,7 @@ fn category_pane(client: &str) -> Result<()> {
     let out = tmux::run(&["list-panes", "-a", "-F", PANE_FMT]).unwrap_or_default();
     let items = parse_panes(&out);
     if items.is_empty() {
-        notify("anka: no panes");
+        notify("no panes");
         return Ok(());
     }
     let Some(i) = picker::pick(&labels_of(&items), "pane")? else {
@@ -387,11 +420,23 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_prefix_vs_root() {
+    fn keybinding_prefix_vs_root_targets_a_pane() {
+        // Regression: `send-keys -t <client_name>` never resolves — the argv
+        // must target the resolved pane id.
         let pfx = format!("prefix{US}c");
-        assert_eq!(keybinding_argv("c0", &pfx, "C-b"), vec!["send-keys", "-t", "c0", "C-b", "c"]);
+        assert_eq!(keybinding_argv("%3", &pfx, "C-b"), vec!["send-keys", "-t", "%3", "C-b", "c"]);
         let root = format!("root{US}F1");
-        assert_eq!(keybinding_argv("c0", &root, "C-b"), vec!["send-keys", "-t", "c0", "F1"]);
+        assert_eq!(keybinding_argv("%3", &root, "C-b"), vec!["send-keys", "-t", "%3", "F1"]);
+    }
+
+    #[test]
+    fn client_pane_resolution_goes_through_display_message() {
+        // display-message -t IS a client target (send-keys -t is not).
+        assert_eq!(
+            pane_of_client_argv("c0"),
+            vec!["display-message", "-p", "-t", "c0", "#{pane_id}"]
+        );
+        assert_eq!(pane_of_client_argv(""), vec!["display-message", "-p", "#{pane_id}"]);
     }
 
     #[test]

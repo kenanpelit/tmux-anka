@@ -1,8 +1,9 @@
 //! `anka clip` — copy stdin to the system clipboard, picking the backend from
-//! the environment: Wayland (`wl-copy`), X11 (`xclip`), else OSC52 to the
-//! terminal. Used from copy-mode via `copy-pipe-no-clear 'anka clip'`, replacing
-//! tmux-yank. Inside tmux, remote/SSH copies are also covered by
-//! `set-clipboard on` (OSC52); this handles the local clipboard.
+//! the environment: Wayland (`wl-copy`), X11 (`xclip`), OSC52 to the terminal,
+//! else `tmux set-buffer -w`. Used from copy-mode via
+//! `copy-pipe-no-clear 'anka clip'`, replacing tmux-yank. Inside tmux,
+//! remote/SSH copies are also covered by `set-clipboard on` (OSC52); this
+//! handles the local clipboard.
 
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
@@ -14,16 +15,25 @@ pub enum Backend {
     Wayland,
     X11,
     Osc52,
+    /// `tmux set-buffer -w`: the headless/SSH copy-pipe case. copy-pipe runs
+    /// us without a controlling terminal, so OSC52-via-/dev/tty silently does
+    /// nothing; tmux itself forwards the buffer to the client's clipboard per
+    /// its `set-clipboard` setting.
+    TmuxBuffer,
 }
 
-/// Choose a clipboard backend from which display servers are present.
-pub fn backend(wayland: bool, x11: bool) -> Backend {
+/// Choose a clipboard backend: wl-copy → xclip → OSC52 (needs /dev/tty) →
+/// tmux set-buffer. Without a tty *or* tmux, OSC52 remains the (no-op) last
+/// resort, matching the old behavior.
+pub fn backend(wayland: bool, x11: bool, tty: bool, tmux: bool) -> Backend {
     if wayland {
         Backend::Wayland
     } else if x11 {
         Backend::X11
-    } else {
+    } else if tty || !tmux {
         Backend::Osc52
+    } else {
+        Backend::TmuxBuffer
     }
 }
 
@@ -84,13 +94,24 @@ fn copy_via(cmd: &str, args: &[&str], data: &[u8]) {
 pub(crate) fn copy(data: &[u8], primary: bool) {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     let x11 = std::env::var_os("DISPLAY").is_some();
-    match backend(wayland, x11) {
+    // Only probe /dev/tty when it could matter (no display server).
+    let tty = if wayland || x11 {
+        None
+    } else {
+        std::fs::OpenOptions::new().write(true).open("/dev/tty").ok()
+    };
+    let in_tmux = std::env::var_os("TMUX").is_some_and(|v| !v.is_empty());
+    match backend(wayland, x11, tty.is_some(), in_tmux) {
         Backend::Wayland => copy_via("wl-copy", &wl_args(primary), data),
         Backend::X11 => copy_via("xclip", &xclip_args(primary), data),
         Backend::Osc52 => {
-            if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            if let Some(mut tty) = tty {
                 let _ = tty.write_all(osc52(data).as_bytes());
             }
+        }
+        Backend::TmuxBuffer => {
+            let text = String::from_utf8_lossy(data);
+            crate::tmux::run_ok(&["set-buffer", "-w", "--", &text]);
         }
     }
 }
@@ -108,10 +129,21 @@ mod tests {
 
     #[test]
     fn backend_prefers_wayland_then_x_then_osc52() {
-        assert_eq!(backend(true, true), Backend::Wayland);
-        assert_eq!(backend(true, false), Backend::Wayland);
-        assert_eq!(backend(false, true), Backend::X11);
-        assert_eq!(backend(false, false), Backend::Osc52);
+        assert_eq!(backend(true, true, true, true), Backend::Wayland);
+        assert_eq!(backend(true, false, false, false), Backend::Wayland);
+        assert_eq!(backend(false, true, false, false), Backend::X11);
+        assert_eq!(backend(false, false, true, false), Backend::Osc52);
+    }
+
+    #[test]
+    fn headless_copy_pipe_falls_back_to_tmux_buffer() {
+        // No display server + no /dev/tty (copy-pipe) + inside tmux → the copy
+        // must go through `set-buffer -w`, not silently do nothing.
+        assert_eq!(backend(false, false, false, true), Backend::TmuxBuffer);
+        // A tty available → OSC52 still wins over set-buffer.
+        assert_eq!(backend(false, false, true, true), Backend::Osc52);
+        // Neither tty nor tmux: nothing can work; stays OSC52 (harmless no-op).
+        assert_eq!(backend(false, false, false, false), Backend::Osc52);
     }
 
     #[test]

@@ -96,7 +96,9 @@ fn zoxide_items() -> Vec<Item> {
 fn activate(item: &Item, snap: Option<&Snapshot>) -> Result<()> {
     match item {
         Item::Live(n) => {
-            tmux::run_ok(&["switch-client", "-t", n]);
+            // `=` pins an exact-name match (prefix matching could hit "dev2"
+            // when "dev" was chosen).
+            tmux::run_ok(&["switch-client", "-t", &format!("={n}")]);
         }
         Item::Snapshot(n) => {
             if let Some(s) = snap {
@@ -104,11 +106,13 @@ fn activate(item: &Item, snap: Option<&Snapshot>) -> Result<()> {
             }
         }
         Item::Window { session, index, .. } => {
-            tmux::run_ok(&["switch-client", "-t", session]);
-            tmux::run_ok(&["select-window", "-t", &format!("{session}:{index}")]);
+            tmux::run_ok(&["switch-client", "-t", &format!("={session}")]);
+            tmux::run_ok(&["select-window", "-t", &format!("={session}:{index}")]);
         }
         Item::Zoxide(p) => {
             let base = p.file_name().and_then(|s| s.to_str()).unwrap_or("dir");
+            // new_in_dir switches to an existing session of the same name
+            // instead of dying on tmux's "duplicate session".
             session::new_in_dir(&sanitize(base), &p.display().to_string())?;
         }
     }
@@ -117,14 +121,42 @@ fn activate(item: &Item, snap: Option<&Snapshot>) -> Result<()> {
 
 fn do_kill(item: &Item) {
     if let Item::Live(n) = item {
-        tmux::run_ok(&["kill-session", "-t", n]);
+        tmux::run_ok(&["kill-session", "-t", &format!("={n}")]);
     }
 }
 
-fn do_rename(item: &Item, to: &str) {
-    // Only live sessions exist in tmux to rename; snapshot rename is out of scope.
-    if let Item::Live(n) = item {
-        tmux::run_ok(&["rename-session", "-t", n, to]);
+/// Rename a live tmux session, or a session *inside the last snapshot* (the
+/// store file is rewritten via a store helper). Returns whether anything
+/// changed (a snapshot rename requires the caller to reload the snapshot).
+fn do_rename(item: &Item, to: &str) -> bool {
+    let to = to.trim();
+    if to.is_empty() {
+        return false;
+    }
+    match item {
+        Item::Live(n) => {
+            if to == n {
+                return false;
+            }
+            tmux::run_ok(&["rename-session", "-t", &format!("={n}"), to]);
+            true
+        }
+        Item::Snapshot(n) => {
+            if to == n {
+                return false;
+            }
+            let Some(store_name) = store::last_name() else {
+                return false;
+            };
+            match store::rename_snapshot_session(&store_name, n, to) {
+                Ok(()) => true,
+                Err(e) => {
+                    crate::notify::error(&format!("{e:#}"));
+                    false
+                }
+            }
+        }
+        _ => false,
     }
 }
 
@@ -176,7 +208,7 @@ fn best_match<'a>(items: &'a [Item], query: &str) -> Option<&'a Item> {
 
 // ── Interactive TUI ─────────────────────────────────────────────────────────
 
-fn interactive(items: Vec<Item>, snap: Option<Snapshot>, cfg: &Config) -> Result<()> {
+fn interactive(items: Vec<Item>, mut snap: Option<Snapshot>, cfg: &Config) -> Result<()> {
     let mut state = State::new(items, Mode::Sessions);
     let raw = term::RawMode::enter()?;
     let mut preview = String::new();
@@ -213,7 +245,13 @@ fn interactive(items: Vec<Item>, snap: Option<Snapshot>, cfg: &Config) -> Result
                 Step::Stay(stay) => {
                     match stay {
                         Stay::Kill(it) => do_kill(&it),
-                        Stay::Rename { item, to } => do_rename(&item, &to),
+                        Stay::Rename { item, to } => {
+                            // A successful snapshot rename rewrote the store
+                            // file — reload so the list shows the new name.
+                            if do_rename(&item, &to) && matches!(item, Item::Snapshot(_)) {
+                                snap = load_last_snapshot();
+                            }
+                        }
                     }
                     state.set_items(mode_items(state.mode(), snap.as_ref(), cfg.zoxide));
                     details = live_details();
@@ -298,6 +336,7 @@ const C_LIVE: &str = "\x1b[38;5;114m";
 const C_SNAP: &str = "\x1b[38;5;110m";
 const C_DIM: &str = "\x1b[38;5;245m";
 const C_ACCENT: &str = "\x1b[38;5;75m";
+const C_WARN: &str = "\x1b[1;38;5;203m";
 const BOLD: &str = "\x1b[1m";
 const FG: &str = "\x1b[39m"; // reset foreground only (keeps bold/bg on selected rows)
 const R: &str = "\x1b[0m";
@@ -418,13 +457,18 @@ fn render(state: &State, preview: &str, cfg: &Config, details: &Details, snap: O
         }
     }
 
-    // Footer.
+    // Footer: a pending kill-confirmation / notice wins over the static help.
     out.push_str(&term::move_to(rows, 1));
-    out.push_str(C_DIM);
-    out.push_str(&truncate(
-        " ↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · ⇥ mode · esc",
-        cols as usize,
-    ));
+    if let Some(msg) = state.footer() {
+        out.push_str(C_WARN);
+        out.push_str(&truncate(&format!(" {msg}"), cols as usize));
+    } else {
+        out.push_str(C_DIM);
+        out.push_str(&truncate(
+            " ↑↓/^p^n move · 1-9 jump · ⏎ go (type+⏎ new) · ^r rename · ^x kill · ⇥ mode · esc",
+            cols as usize,
+        ));
+    }
     out.push_str(R);
 
     print!("{out}");

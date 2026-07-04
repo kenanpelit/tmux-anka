@@ -84,21 +84,21 @@ pub fn tokens_for(filter: &str, text: &str) -> Vec<String> {
     }
 }
 
-pub fn run(pane: Option<&str>, source: Option<&str>) -> Result<()> {
+pub fn run(pane: Option<&str>, source: Option<&str>, client: Option<&str>) -> Result<()> {
     match source {
         None => {
             let pane = pane.ok_or_else(|| anyhow::anyhow!("grab needs --pane"))?;
-            launch(pane)
+            launch(pane, client)
         }
         Some(file) => pick_loop(file, pane.unwrap_or("")),
     }
 }
 
-fn launch(pane: &str) -> Result<()> {
+fn launch(pane: &str, client: Option<&str>) -> Result<()> {
     let text = crate::tmux::run(&["capture-pane", "-p", "-J", "-t", pane, "-S", "-100"])
         .unwrap_or_default();
     if tokens_for("all", &text).is_empty() {
-        crate::tmux::run_ok(&["display-message", "anka: nothing to grab"]);
+        crate::notify::info("nothing to grab");
         return Ok(());
     }
     // Private scratch file (0600, O_EXCL, unique name) — see url.rs.
@@ -110,9 +110,14 @@ fn launch(pane: &str) -> Result<()> {
         "{} grab {} --pane {}",
         crate::process::shell_quote(&exe.display().to_string()),
         crate::process::shell_quote(&tmp.display().to_string()),
-        pane
+        crate::process::shell_quote(pane)
     );
-    crate::tmux::run_ok(&["display-popup", "-w", "70%", "-h", "70%", "-E", &cmd]);
+    let mut argv = vec!["display-popup", "-w", "70%", "-h", "70%"];
+    if let Some(c) = client {
+        argv.extend(["-c", c]); // open on the invoking client
+    }
+    argv.extend(["-E", &cmd]);
+    crate::tmux::run_ok(&argv);
     let _ = std::fs::remove_file(&tmp);
     Ok(())
 }

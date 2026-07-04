@@ -1,8 +1,15 @@
 //! Sessionist-style quick session actions.
+//!
+//! Success/failure is reported through `notify` (display-message inside
+//! run-shell contexts, stdout on a terminal), and every tmux `-t` that names a
+//! stored/derived session uses the exact-match `=` prefix so a session called
+//! `dev` can never resolve onto `dev2`.
 
 use anyhow::{bail, Result};
 
 use crate::cli::SessionCmd;
+use crate::notify;
+use crate::prompt;
 use crate::tmux;
 
 pub fn run(action: SessionCmd) -> Result<()> {
@@ -10,13 +17,48 @@ pub fn run(action: SessionCmd) -> Result<()> {
         bail!("no tmux server running");
     }
     match action {
-        SessionCmd::New { name } => new_named(&name),
+        SessionCmd::New { name, prompt } => {
+            match resolve_name(name, prompt, "New session:")? {
+                Some(n) => new_named(&n),
+                None => Ok(()), // cancelled: exit silently
+            }
+        }
         SessionCmd::Kill => kill(),
-        SessionCmd::Promote { name } => promote(&name),
-        SessionCmd::Switch { name } => switch(&name),
+        SessionCmd::Promote { name, prompt } => {
+            match resolve_name(name, prompt, "Promote pane to session:")? {
+                Some(n) => promote(&n),
+                None => Ok(()),
+            }
+        }
+        SessionCmd::Switch { name, prompt } => {
+            match resolve_name(name, prompt, "Switch to session:")? {
+                Some(n) => switch(&n),
+                None => Ok(()),
+            }
+        }
         SessionCmd::Last => last(),
         SessionCmd::Rename { name } => rename(&name),
     }
+}
+
+/// The action's target name: the CLI argument when given, else (with
+/// `--prompt`) a one-line interactive prompt in the popup tty (stdin line off
+/// a tty). `Ok(None)` = cancelled — the caller exits silently. The typed name
+/// is passed as a plain argv element everywhere: no shell interpolation.
+fn resolve_name(name: Option<String>, use_prompt: bool, label: &str) -> Result<Option<String>> {
+    if let Some(n) = name {
+        return Ok(Some(n));
+    }
+    if use_prompt {
+        return prompt::prompt_line(label);
+    }
+    bail!("a session name is required (or --prompt)");
+}
+
+/// Exact-match tmux target for a session name (`=` pins exact, otherwise
+/// tmux's prefix matching could land on the wrong session).
+fn exact(name: &str) -> String {
+    format!("={name}")
 }
 
 /// The pane anka was invoked from: `$TMUX_PANE` (set by tmux for run-shell and
@@ -56,6 +98,10 @@ fn sessions() -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn session_exists(name: &str) -> bool {
+    sessions().iter().any(|s| s == name)
+}
+
 fn current_cwd() -> String {
     current_pane()
         .map(|p| pane_var(&p, "#{pane_current_path}"))
@@ -64,24 +110,27 @@ fn current_cwd() -> String {
 
 /// Create (or switch to) a session named `name`, rooted at the current cwd.
 pub fn new_named(name: &str) -> Result<()> {
-    if sessions().iter().any(|s| s == name) {
-        tmux::run_ok(&["switch-client", "-t", name]);
-        println!("switched to existing session '{name}'");
-        return Ok(());
-    }
     new_in_dir(name, &current_cwd())
 }
 
-/// Create a session named `name` rooted at `dir` (empty = tmux default), switch.
+/// Create a session named `name` rooted at `dir` (empty = tmux default), then
+/// switch to it. If the session already exists (a zoxide dir whose basename
+/// collides with a live session, a re-typed name, …) just switch — same
+/// behavior as `new_named`, instead of dying on tmux's "duplicate session".
 pub fn new_in_dir(name: &str, dir: &str) -> Result<()> {
+    if session_exists(name) {
+        tmux::run_ok(&["switch-client", "-t", &exact(name)]);
+        notify::success(&format!("switched to existing session '{name}'"));
+        return Ok(());
+    }
     let mut args = vec!["new-session", "-d", "-s", name];
     if !dir.is_empty() {
         args.push("-c");
         args.push(dir);
     }
     tmux::run(&args)?;
-    tmux::run_ok(&["switch-client", "-t", name]);
-    println!("created session '{name}'");
+    tmux::run_ok(&["switch-client", "-t", &exact(name)]);
+    notify::success(&format!("created session '{name}'"));
     Ok(())
 }
 
@@ -91,14 +140,14 @@ fn kill() -> Result<()> {
     let Some(target) = others.first() else {
         bail!("refusing to kill the last session '{cur}' (would stop the server)");
     };
-    tmux::run_ok(&["switch-client", "-t", target]);
-    tmux::run(&["kill-session", "-t", &cur])?;
-    println!("killed session '{cur}', switched to '{target}'");
+    tmux::run_ok(&["switch-client", "-t", &exact(target)]);
+    tmux::run(&["kill-session", "-t", &exact(&cur)])?;
+    notify::success(&format!("killed session '{cur}', switched to '{target}'"));
     Ok(())
 }
 
 fn promote(name: &str) -> Result<()> {
-    if sessions().iter().any(|s| s == name) {
+    if session_exists(name) {
         bail!("session '{name}' already exists");
     }
     let pane = current_pane().ok_or_else(|| anyhow::anyhow!("no current pane to promote"))?;
@@ -110,22 +159,26 @@ fn promote(name: &str) -> Result<()> {
         args.push(&cwd);
     }
     tmux::run(&args)?;
+    // NOTE: move-pane/select-layout/display-message take *pane* targets, and
+    // tmux's `=` exact-match prefix is only valid for session/window targets
+    // ("can't find pane: =x") — so these use the plain name. The freshly
+    // created session resolves exactly anyway (tmux prefers exact matches).
     let placeholder = pane_var(name, "#{pane_id}");
     tmux::run(&["move-pane", "-s", &pane, "-t", name])?;
     if !placeholder.is_empty() {
         tmux::run_ok(&["kill-pane", "-t", &placeholder]);
     }
     tmux::run_ok(&["select-layout", "-t", name, "tiled"]);
-    tmux::run_ok(&["switch-client", "-t", name]);
-    println!("promoted pane into new session '{name}'");
+    tmux::run_ok(&["switch-client", "-t", &exact(name)]);
+    notify::success(&format!("promoted pane into new session '{name}'"));
     Ok(())
 }
 
 fn switch(name: &str) -> Result<()> {
-    if !sessions().iter().any(|s| s == name) {
+    if !session_exists(name) {
         bail!("session '{name}' not found");
     }
-    tmux::run(&["switch-client", "-t", name])?;
+    tmux::run(&["switch-client", "-t", &exact(name)])?;
     Ok(())
 }
 
@@ -136,7 +189,7 @@ fn last() -> Result<()> {
 
 fn rename(name: &str) -> Result<()> {
     let cur = current_session()?;
-    tmux::run(&["rename-session", "-t", &cur, name])?;
-    println!("renamed session '{cur}' to '{name}'");
+    tmux::run(&["rename-session", "-t", &exact(&cur), name])?;
+    notify::success(&format!("renamed session '{cur}' to '{name}'"));
     Ok(())
 }

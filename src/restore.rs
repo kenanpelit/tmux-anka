@@ -22,7 +22,7 @@ pub fn restore(name: Option<&str>) -> Result<()> {
     let name = resolve_name(name)?;
     let snap = load_snapshot(&name)?;
     let restored = restore_snapshot(&snap)?;
-    println!("restored snapshot '{name}' ({restored} sessions)");
+    crate::notify::success(&format!("restored snapshot '{name}' ({restored} sessions)"));
     Ok(())
 }
 
@@ -49,7 +49,7 @@ pub fn restore_snapshot(snap: &Snapshot) -> Result<usize> {
         restored += 1;
     }
     if let Some(active) = &snap.client.active_session {
-        tmux::run_ok(&["switch-client", "-t", active]);
+        tmux::run_ok(&["switch-client", "-t", &format!("={active}")]);
     }
     Ok(restored)
 }
@@ -72,7 +72,7 @@ pub fn restore_one(snap: &Snapshot, session_name: &str) -> Result<bool> {
     }
     restore_session(session, &cfg, client_size(snap))
         .with_context(|| format!("restoring session '{}'", session.name))?;
-    tmux::run_ok(&["switch-client", "-t", &session.name]);
+    tmux::run_ok(&["switch-client", "-t", &format!("={}", session.name)]);
     Ok(true)
 }
 
@@ -271,6 +271,7 @@ mod tests {
             zoxide: false,
             save_generations: 3,
             history_limit: 2000,
+            restore_verbatim: false,
         }
     }
 

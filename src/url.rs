@@ -150,11 +150,12 @@ fn is_domain_path(s: &str) -> bool {
 }
 
 /// Entry. With `--pane <id>` (the keybinding path): capture that pane and, if it
-/// has URLs, reopen ourselves inside a `display-popup` for the picker. Otherwise
+/// has URLs, reopen ourselves inside a `display-popup` for the picker (on
+/// `--client` when given, so it never lands on the wrong client). Otherwise
 /// (inside the popup): read `source`/stdin, extract, pick, open.
-pub fn run(pane: Option<&str>, source: Option<&str>) -> Result<()> {
+pub fn run(pane: Option<&str>, source: Option<&str>, client: Option<&str>) -> Result<()> {
     if let Some(pane_id) = pane {
-        return run_pane(pane_id);
+        return run_pane(pane_id, client);
     }
     pick_from(source)
 }
@@ -162,11 +163,11 @@ pub fn run(pane: Option<&str>, source: Option<&str>) -> Result<()> {
 /// Keybinding path (no tty): capture the pane, then hand off to a popup that
 /// runs the picker. `#{pane_id}` only expands in the calling run-shell, which is
 /// why capture happens here and not inside the popup.
-fn run_pane(pane_id: &str) -> Result<()> {
+fn run_pane(pane_id: &str, client: Option<&str>) -> Result<()> {
     let text = crate::tmux::run(&["capture-pane", "-p", "-J", "-t", pane_id, "-S", "-3000"])
         .unwrap_or_default();
     if extract_urls(&text).is_empty() {
-        crate::tmux::run_ok(&["display-message", "anka: no URLs in this pane"]);
+        crate::notify::info("no URLs in this pane");
         return Ok(());
     }
     // Stash the text in a file (keeps the popup's stdin free for keystrokes) and
@@ -184,7 +185,12 @@ fn run_pane(pane_id: &str) -> Result<()> {
         crate::process::shell_quote(&exe.display().to_string()),
         crate::process::shell_quote(&tmp.display().to_string())
     );
-    crate::tmux::run_ok(&["display-popup", "-w", "70%", "-h", "60%", "-E", &cmd]);
+    let mut argv = vec!["display-popup", "-w", "70%", "-h", "60%"];
+    if let Some(c) = client {
+        argv.extend(["-c", c]); // open on the invoking client
+    }
+    argv.extend(["-E", &cmd]);
+    crate::tmux::run_ok(&argv);
     let _ = std::fs::remove_file(&tmp);
     Ok(())
 }
@@ -224,14 +230,27 @@ fn browser_cmd() -> String {
     std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".into())
 }
 
+/// Split a browser setting into program + leading args: `$BROWSER` is
+/// conventionally a *command line* (`firefox --new-tab`), and using the whole
+/// string as argv[0] made the spawn fail silently. `None` for a blank value.
+pub fn split_browser(cmd: &str) -> Option<(String, Vec<String>)> {
+    let mut it = cmd.split_whitespace().map(String::from);
+    let prog = it.next()?;
+    Some((prog, it.collect()))
+}
+
 pub(crate) fn open(url: &str) {
-    let browser = browser_cmd();
+    let Some((prog, args)) = split_browser(&browser_cmd()) else {
+        crate::notify::error("no browser configured ($BROWSER / @anka-url-browser is blank)");
+        return;
+    };
     // Detach (setsid -f) so the browser outlives the closing popup; *wait* for
     // setsid to return so it has reparented the browser into its own session
     // before we exit (otherwise the popup teardown can SIGHUP it).
     let res = Command::new("setsid")
         .arg("-f")
-        .arg(&browser)
+        .arg(&prog)
+        .args(&args)
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -244,12 +263,16 @@ pub(crate) fn open(url: &str) {
     }
     // Fallback: try the browser directly (no setsid), e.g. setsid missing or the
     // browser is only on a login PATH.
-    let _ = Command::new(&browser)
+    let spawned = Command::new(&prog)
+        .args(&args)
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+    if let Err(e) = spawned {
+        crate::notify::error(&format!("could not launch browser {prog:?}: {e}"));
+    }
 }
 
 // ── Non-tty fallback (tests, pipes) ─────────────────────────────────────────
@@ -376,6 +399,18 @@ mod tests {
             urls,
             vec!["https://x.example/ok".to_string(), "https://y.example/p".to_string()]
         );
+    }
+
+    #[test]
+    fn browser_with_arguments_splits_into_program_and_args() {
+        // "$BROWSER='firefox --new-tab'" used to become argv[0] wholesale.
+        assert_eq!(
+            split_browser("firefox --new-tab"),
+            Some(("firefox".into(), vec!["--new-tab".into()]))
+        );
+        assert_eq!(split_browser("xdg-open"), Some(("xdg-open".into(), vec![])));
+        assert_eq!(split_browser(""), None);
+        assert_eq!(split_browser("   "), None);
     }
 
     #[test]

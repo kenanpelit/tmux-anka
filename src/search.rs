@@ -37,20 +37,20 @@ pub fn pick_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn run(pane: Option<&str>, source: Option<&str>) -> Result<()> {
+pub fn run(pane: Option<&str>, source: Option<&str>, client: Option<&str>) -> Result<()> {
     match source {
         None => {
             let pane = pane.ok_or_else(|| anyhow::anyhow!("search needs --pane"))?;
-            launch(pane)
+            launch(pane, client)
         }
         Some(file) => jump_from(file, pane.unwrap_or("")),
     }
 }
 
-fn launch(pane: &str) -> Result<()> {
+fn launch(pane: &str, client: Option<&str>) -> Result<()> {
     let text = tmux::run(&["capture-pane", "-p", "-t", pane, "-S", "-"]).unwrap_or_default();
     if text.lines().all(|l| l.trim().is_empty()) {
-        tmux::run_ok(&["display-message", "anka: no scrollback"]);
+        crate::notify::info("no scrollback");
         return Ok(());
     }
     // Private scratch file (0600, O_EXCL, unique name) — see url.rs.
@@ -62,9 +62,14 @@ fn launch(pane: &str) -> Result<()> {
         "{} search {} --pane {}",
         crate::process::shell_quote(&exe.display().to_string()),
         crate::process::shell_quote(&tmp.display().to_string()),
-        pane
+        crate::process::shell_quote(pane)
     );
-    tmux::run_ok(&["display-popup", "-w", "80%", "-h", "70%", "-E", &cmd]);
+    let mut argv = vec!["display-popup", "-w", "80%", "-h", "70%"];
+    if let Some(c) = client {
+        argv.extend(["-c", c]); // open on the invoking client
+    }
+    argv.extend(["-E", &cmd]);
+    tmux::run_ok(&argv);
     let _ = std::fs::remove_file(&tmp);
     Ok(())
 }

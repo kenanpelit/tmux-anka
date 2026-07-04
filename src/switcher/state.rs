@@ -218,6 +218,10 @@ pub struct State {
     query: String,
     cursor: usize,
     prompt: Option<Prompt>,
+    /// `^x` pressed on this item — waiting for `y` to confirm the kill.
+    pending_kill: Option<Item>,
+    /// One-shot footer message (e.g. a refused kill), cleared by the next key.
+    notice: Option<String>,
 }
 
 impl State {
@@ -229,6 +233,8 @@ impl State {
             query: String::new(),
             cursor: 0,
             prompt: None,
+            pending_kill: None,
+            notice: None,
         };
         s.refilter();
         s
@@ -269,6 +275,19 @@ impl State {
         }
     }
 
+    /// Footer line to show instead of the static help: a pending kill
+    /// confirmation, or a one-shot notice.
+    pub fn footer(&self) -> Option<String> {
+        if let Some(it) = &self.pending_kill {
+            return Some(format!("kill {}? y/n", item_name(it)));
+        }
+        self.notice.clone()
+    }
+
+    fn live_count(&self) -> usize {
+        self.items.iter().filter(|i| matches!(i, Item::Live(_))).count()
+    }
+
     fn refilter(&mut self) {
         self.filtered = fuzzy_rank(&self.items, &self.query, item_key);
         if self.cursor >= self.filtered.len() {
@@ -277,6 +296,10 @@ impl State {
     }
 
     pub fn apply(&mut self, key: Key) -> Step {
+        self.notice = None; // any key clears a one-shot notice
+        if self.pending_kill.is_some() {
+            return self.apply_kill_confirm(key);
+        }
         if self.prompt.is_some() {
             return self.apply_prompt(key);
         }
@@ -334,12 +357,34 @@ impl State {
                 }
                 _ => Step::Redraw,
             },
+            // `^x` never kills outright: it arms a y/n confirmation (footer),
+            // and the last live session is refused entirely — killing it kills
+            // the tmux server (and this very popup with it).
             Key::Delete => match self.selected().cloned() {
-                Some(it @ Item::Live(_)) => Step::Stay(Stay::Kill(it)),
+                Some(it @ Item::Live(_)) => {
+                    if self.live_count() <= 1 {
+                        self.notice = Some(format!(
+                            "not killing {}: last live session (server would die)",
+                            item_name(&it)
+                        ));
+                    } else {
+                        self.pending_kill = Some(it);
+                    }
+                    Step::Redraw
+                }
                 _ => Step::Redraw,
             },
             Key::Ctrl(_) => Step::Redraw,
             Key::Cancel => Step::Exit(Exit::Cancel),
+        }
+    }
+
+    /// A kill is pending: `y` executes it, anything else cancels.
+    fn apply_kill_confirm(&mut self, key: Key) -> Step {
+        let item = self.pending_kill.take().unwrap();
+        match key {
+            Key::Char('y') | Key::Char('Y') => Step::Stay(Stay::Kill(item)),
+            _ => Step::Redraw,
         }
     }
 
@@ -532,12 +577,62 @@ mod apply_tests {
     }
 
     #[test]
-    fn delete_on_live_is_stay_kill() {
+    fn delete_arms_confirmation_and_y_kills() {
         let mut s = st();
-        match s.apply(Key::Delete) {
+        assert!(matches!(s.apply(Key::Delete), Step::Redraw));
+        let footer = s.footer().expect("confirmation must be in the footer");
+        assert!(footer.contains("kill KENP"), "{footer}");
+        assert!(footer.contains("y/n"), "{footer}");
+        match s.apply(Key::Char('y')) {
             Step::Stay(Stay::Kill(Item::Live(n))) => assert_eq!(n, "KENP"),
             other => panic!("{other:?}"),
         }
+        assert!(s.footer().is_none(), "confirmation must clear after y");
+    }
+
+    #[test]
+    fn delete_confirmation_cancels_on_anything_but_y() {
+        for cancel in [Key::Char('n'), Key::Enter, Key::Cancel, Key::Digit(3)] {
+            let mut s = st();
+            s.apply(Key::Delete);
+            assert!(s.footer().is_some());
+            assert!(
+                matches!(s.apply(cancel), Step::Redraw),
+                "{cancel:?} must cancel, not kill"
+            );
+            assert!(s.footer().is_none(), "{cancel:?} must clear the confirmation");
+            // The cancelling key is consumed by the confirmation — never
+            // typed into the query.
+            assert_eq!(s.query(), "");
+        }
+    }
+
+    #[test]
+    fn delete_on_last_live_session_is_refused() {
+        // One live session + one snapshot: killing the live one kills the server.
+        let mut s = State::new(
+            vec![Item::Live("only".into()), Item::Snapshot("old".into())],
+            Mode::Sessions,
+        );
+        assert!(matches!(s.apply(Key::Delete), Step::Redraw));
+        let footer = s.footer().expect("refusal must be explained in the footer");
+        assert!(footer.contains("last live session"), "{footer}");
+        // Not armed: 'y' afterwards types into the query instead of killing.
+        match s.apply(Key::Char('y')) {
+            Step::Redraw => {}
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(s.query(), "y");
+        assert!(s.footer().is_none(), "notice is one-shot");
+    }
+
+    #[test]
+    fn delete_on_snapshot_item_does_nothing() {
+        let mut s = st();
+        s.apply(Key::Down);
+        s.apply(Key::Down); // "old" (snapshot)
+        assert!(matches!(s.apply(Key::Delete), Step::Redraw));
+        assert!(s.footer().is_none());
     }
 
     #[test]

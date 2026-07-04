@@ -174,6 +174,37 @@ fn tmp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}.{}.tmp", std::process::id()))
 }
 
+/// Rename a *session inside* snapshot `snapshot`'s JSON (the switcher's `^r`
+/// on a snapshot item). The switcher lists sessions from the last snapshot,
+/// so this — not renaming the snapshot dir — is what makes the typed name
+/// appear in the list.
+pub fn rename_snapshot_session(snapshot: &str, from: &str, to: &str) -> Result<()> {
+    rename_session_in_file(&snapshot_json(snapshot), from, to)
+}
+
+fn rename_session_in_file(path: &Path, from: &str, to: &str) -> Result<()> {
+    let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut snap =
+        crate::model::parse_snapshot(&data).with_context(|| format!("in {}", path.display()))?;
+    if snap.sessions.iter().any(|s| s.name == to) {
+        bail!("snapshot already has a session named '{to}'");
+    }
+    let sess = snap
+        .sessions
+        .iter_mut()
+        .find(|s| s.name == from)
+        .with_context(|| format!("no session '{from}' in the snapshot"))?;
+    sess.name = to.to_string();
+    // Keep the client pointers coherent (active/last session by name).
+    if snap.client.active_session.as_deref() == Some(from) {
+        snap.client.active_session = Some(to.to_string());
+    }
+    if snap.client.last_session.as_deref() == Some(from) {
+        snap.client.last_session = Some(to.to_string());
+    }
+    write_atomic(path, &serde_json::to_vec_pretty(&snap)?)
+}
+
 /// Remove leftover `*.tmp` files from writers that no longer exist (crashed
 /// autosave, killed hook, …) so they don't pile up forever. A tmp file whose
 /// embedded pid is still alive is left alone — it may be a save genuinely in
@@ -488,6 +519,56 @@ mod tests {
         assert!(!dead.exists(), "dead-owner scratch file must be swept");
         assert!(live.exists(), "live-owner scratch file must survive");
         assert!(unrelated.exists(), "non-anka files must never be touched");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── snapshot-session rename (switcher ^r on a snapshot item) ────────────
+
+    fn snapshot_file_with_sessions(dir: &Path, names: &[&str]) -> PathBuf {
+        use crate::model::{Client, Session, Snapshot, SCHEMA};
+        let snap = Snapshot {
+            schema: SCHEMA,
+            anka_version: "t".to_string(),
+            saved_at: "t".to_string(),
+            client: Client {
+                active_session: names.first().map(|s| s.to_string()),
+                last_session: None,
+                width: None,
+                height: None,
+            },
+            sessions: names
+                .iter()
+                .map(|n| Session { name: n.to_string(), windows: vec![] })
+                .collect(),
+        };
+        let path = dir.join("snapshot.json");
+        fs::write(&path, serde_json::to_vec_pretty(&snap).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn rename_session_in_file_renames_and_updates_client_pointer() {
+        let dir = scratch_dir("rename-snap");
+        let path = snapshot_file_with_sessions(&dir, &["work", "other"]);
+        rename_session_in_file(&path, "work", "renamed").unwrap();
+        let snap = crate::model::parse_snapshot(&fs::read(&path).unwrap()).unwrap();
+        let names: Vec<&str> = snap.sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["renamed", "other"]);
+        assert_eq!(snap.client.active_session.as_deref(), Some("renamed"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rename_session_in_file_refuses_collisions_and_missing_sources() {
+        let dir = scratch_dir("rename-snap-bad");
+        let path = snapshot_file_with_sessions(&dir, &["work", "other"]);
+        let err = rename_session_in_file(&path, "work", "other").unwrap_err().to_string();
+        assert!(err.contains("already has a session named 'other'"), "{err}");
+        let err = rename_session_in_file(&path, "ghost", "x").unwrap_err().to_string();
+        assert!(err.contains("no session 'ghost'"), "{err}");
+        // Neither failure may have touched the file.
+        let snap = crate::model::parse_snapshot(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(snap.sessions[0].name, "work");
         fs::remove_dir_all(&dir).ok();
     }
 
