@@ -13,12 +13,15 @@ a restart — automatically.
 
 ## Features
 
-- **Exact restore** — every session/window/pane, the precise tmux layout, each
-  pane's working directory, and (optionally) scrollback contents.
+- **Exact restore** — every session/window/pane, the precise tmux layout, and
+  each pane's working directory. Scrollback contents are captured into the
+  snapshot too (optional), but replaying them into restored panes is not
+  implemented yet — see the roadmap.
 - **JSON snapshots** — human-readable, hand-editable, one directory per snapshot.
-- **Event-driven auto-save** — saves on meaningful tmux events (session/window
-  close, detach) via native hooks; optional interval daemon for periodic saves.
-  No status-bar piggybacking.
+- **Event-driven auto-save** — saves on client detach via a native hook, plus
+  an optional interval daemon for periodic saves. (Session/window close is
+  deliberately *not* hooked: it fires after the session is gone, so saving
+  there would prune it from the snapshot.) No status-bar piggybacking.
 - **Auto-restore on start** — your last snapshot comes back when the tmux server
   starts.
 - **Named snapshots** — `anka save work`, `anka restore work`, `anka list`.
@@ -80,12 +83,21 @@ git clone https://github.com/kenanpelit/tmux-anka \
 | `prefix + @` | Promote the current pane to a new session |
 | `prefix + g` | Switch to a session by name |
 | `prefix + S` | Switch to the last session |
+| `prefix + F` | Action menu (sessions/windows/panes/snapshots) |
+| `prefix + Space` | Grab text from the screen (extrakto-style) |
+| `prefix + m` | Search scrollback and jump (fuzzback-style) |
+
+Three defaults shadow tmux builtins: `Space` (next-layout), `m` (mark pane)
+and `o` (next pane). Set any `@anka-*-key` option to `none` to skip that
+binding and keep the builtin (or your own).
 
 ## Usage
 
-Day to day you do nothing: anka auto-saves on session/window close and detach,
-optionally on an interval, and auto-restores your `last` snapshot when the tmux
-server starts. The rest is on demand.
+Day to day you do nothing: anka auto-saves when you detach and (optionally) on
+an interval, and auto-restores your `last` snapshot when the tmux server
+starts. Session/window close is intentionally not hooked — that event fires
+after the session is already gone, so a save there would drop it from the
+snapshot (and cascade to an empty one on logout). The rest is on demand.
 
 **Named snapshots** — keep curated layouts alongside the rolling `last` one:
 
@@ -122,7 +134,7 @@ picker, and opens the chosen one in your browser — `@anka-url-browser` if set,
 else `$BROWSER`, else `xdg-open`. No fzf/extra tools. Bind it:
 
 ```tmux
-bind u run-shell -b "~/.tmux/plugins/tmux-anka/bin/anka url --pane '#{pane_id}'"
+bind u run-shell -b "~/.tmux/plugins/tmux-anka/bin/anka url --pane '#{pane_id}' --client '#{client_name}'"
 ```
 
 `anka url --pane` captures the pane (run-shell expands `#{pane_id}`; a
@@ -133,9 +145,11 @@ the picker. `anka url [file]` / `anka url` (stdin) are the picker itself.
 opens a zoxide dir as a new session. Type a name that matches nothing and `⏎` to
 create it; `^r` renames the selected session, `^x` kills it. A preview pane
 (`@anka-switch-preview on`) shows the highlighted target. (`prefix + P` opens the
-same switcher; on a non-tty it degrades to a numbered menu.) For quick,
-prompt-free actions there are also `prefix + C` (new), `X` (kill), `@` (promote
-pane), `g` (switch by name), and `S` (last session).
+same switcher; on a non-tty it degrades to a numbered menu.) For quick actions
+there are also `prefix + C` (new), `X` (kill), `@` (promote pane), `g` (switch
+by name), and `S` (last session). `C`/`@`/`g` ask for the name with an inline
+prompt in a small popup — the typed input goes straight to anka, never through
+a shell.
 
 **Freeze a layout to a re-runnable blueprint** — a hand-editable template you can
 relaunch anywhere, independent of the rolling snapshots:
@@ -165,7 +179,10 @@ set -g status-right "… #{@anka_status} …"
 |--------|---------|---------|
 | `@anka-dir` | `${XDG_DATA_HOME}/tmux/anka` | Snapshot storage directory |
 | `@anka-capture-pane-contents` | `on` | Capture pane scrollback |
+| `@anka-history-limit` | `2000` | Max scrollback lines captured per pane (`0` = unlimited) |
+| `@anka-save-generations` | `3` | Rotated snapshot generations to keep (`0` = off) |
 | `@anka-restore-processes` | `ssh psql mysql sqlite3 npm yarn nvim` | Programs to relaunch |
+| `@anka-restore-verbatim` | `off` | Relaunch captured commands verbatim, without the allow-list |
 | `@anka-strategy-nvim` | `session` | nvim/vim restore strategy |
 | `@anka-save-interval` | `10` | Interval daemon period in minutes (`0` disables) |
 | `@anka-restore-on-start` | `on` | Auto-restore last snapshot on server start |
@@ -176,10 +193,13 @@ set -g status-right "… #{@anka_status} …"
 | `@anka-switch-key` | `o` | Open the switcher (leaves `prefix + s` = choose-tree) |
 | `@anka-new-key` / `@anka-kill-key` / `@anka-promote-key` | `C` / `X` / `@` | Session new/kill/promote |
 | `@anka-switch-name-key` / `@anka-last-key` | `g` / `S` | Switch by name / last session |
+| `@anka-menu-key` | `F` | Open the action menu |
+| `@anka-grab-key` / `@anka-search-key` | `Space` / `m` | Grab screen text / search scrollback |
 | `@anka-url-browser` | _(unset → `$BROWSER` → `xdg-open`)_ | Command `anka url` opens the chosen URL with |
 | `@anka-popup-width` / `@anka-popup-height` | `80%` / `75%` | Popup size for the switcher/pick TUIs (any `display-popup` size, e.g. `90%` or `120`) |
 
-Set any `@anka-*-key` to `none` to skip that binding and keep your own.
+Set any `@anka-*-key` to `none` to skip that binding and keep your own (some
+defaults shadow tmux builtins — see [Keybindings](#keybindings)).
 
 ## CLI
 
@@ -190,11 +210,15 @@ anka list               List saved snapshots
 anka rm <name>          Remove a snapshot
 anka pick               Open the session switcher (alias of `switch`)
 anka switch             Interactive session switcher (live + snapshot + zoxide)
+anka menu               Action menu: sessions/windows/panes/snapshots (popup)
 anka url [file]         Pick a URL from pane text (or stdin) and open in $BROWSER
-anka session new <name>     Create / switch to a named session
+anka grab --pane <id>   Grab words/paths/URLs from the visible pane text (extrakto-style)
+anka search --pane <id> Fuzzy-search scrollback and jump to the match (fuzzback-style)
+anka clip               Copy stdin to the system clipboard (OSC 52)
+anka session new [name]     Create / switch to a named session (--prompt asks inline)
 anka session kill           Kill the current session, switching away first
-anka session promote <name> Move the current pane into a new session
-anka session switch <name>  Switch to a session by name
+anka session promote [name] Move the current pane into a new session (--prompt)
+anka session switch [name]  Switch to a session by name (--prompt)
 anka session last           Switch to the last session
 anka session rename <new>   Rename the current session
 anka freeze [name]      Freeze a snapshot to a declarative blueprint
@@ -202,6 +226,7 @@ anka freeze --script    …also export a standalone shell script
 anka up <name>          Re-launch a frozen blueprint
 anka status             Print the status-bar widget text
 anka daemon             Run the interval auto-save daemon
+anka doctor             Check the setup: binary, tmux, options, snapshot health
 ```
 
 ## Design

@@ -19,7 +19,10 @@ human-readable **JSON** snapshot format. Linux-only (uses `/proc`).
 ## Distribution
 
 - Source of truth: standalone repo `github.com/kenanpelit/tmux-anka`.
-- `cargo-dist`/CI publishes static binaries to GitHub Releases on tag.
+- A hand-rolled GitHub Actions workflow (`.github/workflows/release.yml`)
+  publishes static musl binaries (x86_64 + aarch64) plus a `SHA256SUMS`
+  asset to GitHub Releases on tag; `install-binary.sh` verifies the checksum
+  before installing.
 - Installed via TPM (`set -g @plugin 'kenanpelit/tmux-anka'`). The `anka.tmux`
   entrypoint resolves the binary **inside the plugin directory** (like
   `tmux-thumbs`), never touching `PATH`. If missing or version-mismatched, it
@@ -29,7 +32,7 @@ human-readable **JSON** snapshot format. Linux-only (uses `/proc`).
 
 ```
 anka.tmux            TPM entrypoint (bash): resolve binary, binds, hooks, status
-scripts/install-binary.sh   download-release-or-cargo-build
+scripts/install-binary.sh   download-release (checksum-verified) or cargo-build
 src/
   main.rs / cli.rs   clap subcommand dispatch
   tmux.rs            tmux CLI wrapper (run + query with -F)
@@ -38,10 +41,16 @@ src/
   store.rs           snapshot dirs, `last` symlink, list/rm
   capture.rs         save: query tmux -> model -> JSON (atomic write)
   process.rs         foreground command resolution via /proc
-  restore.rs         restore: JSON -> tmux commands
-  nvim.rs            nvim/vim Session.vim strategy
+  restore.rs         restore: JSON -> tmux commands (incl. nvim/vim strategy)
   daemon.rs          interval auto-save daemon (single-instance)
-  tui.rs             ratatui per-session picker
+  switcher/          session switcher: pure state machine + raw-mode term I/O
+  picker.rs          shared bordered picker UI (url/grab/search reuse it)
+  session.rs         sessionist-style quick actions (new/kill/promote/…)
+  menu.rs            action menu (tmux-fzf replacement)
+  url.rs             URL extraction + open-in-browser
+  grab.rs            screen-text grabber (extrakto replacement)
+  search.rs          scrollback search + jump (fuzzback replacement)
+  clip.rs            OSC 52 clipboard helper
   freeze.rs          snapshot -> declarative blueprint + shell script export
   status.rs          #{@anka_status} text
 ```
@@ -115,14 +124,18 @@ Deterministic order:
    session file exists in the cwd, else the captured argv (reopen the files).
 6. Set active window/pane, then client `active`/`last` session.
 
-Non-destructive by default; partial restore continues best-effort with a
-summary. Linux-only `/proc` keeps process logic simple.
+Non-destructive by default; a partial restore continues best-effort.
+Linux-only `/proc` keeps process logic simple. Captured pane contents are
+stored in the snapshot but not yet replayed into restored panes (roadmap).
 
 ## Auto-save (event-driven + optional daemon)
 
-- `anka.tmux` registers native tmux hooks (`session-closed`, `client-detached`,
-  structural window changes) → `anka hook <event>` → debounced `anka save`.
-  No polling, no status-interval piggyback.
+- `anka.tmux` registers a native tmux hook on `client-detached` (indexed slot
+  `client-detached[27]`, so user/plugin hooks coexist) → `anka hook
+  client-detached` → `anka save`. No polling, no status-interval piggyback.
+- `session-closed` is deliberately **not** hooked: it fires after the session
+  is gone, so saving there prunes it from the snapshot — and cascades to an
+  empty snapshot on logout/shutdown as every session tears down.
 - Optional `anka daemon` provides periodic interval saves
   (`@anka-save-interval` minutes); single-instance via a lockfile; exits when
   the tmux server is gone.
@@ -160,7 +173,10 @@ Native replacement for `tmux-sessionist` (quick actions) and `tmux-sessionx`
 - **Quick actions** (`anka session …`): `new`/`kill`/`promote`/`switch`/`last`/
   `rename`, bound to `prefix + C/X/@/g/S`. They act on the invoking pane's
   session (via `$TMUX_PANE`); `kill` refuses the last session; `promote` moves
-  the current pane into a fresh session.
+  the current pane into a fresh session. `new`/`promote`/`switch` take the name
+  from `--prompt` — a raw-mode inline prompt inside a `display-popup` — so the
+  typed input never rides through a shell string (no `command-prompt` `%%`
+  interpolation to inject into).
 
 `anka pick` is an alias of `anka switch`.
 
@@ -178,8 +194,8 @@ See the table in `README.md`. All options read via `tmux show-options -gqv`.
 
 - Missing/stale binary → install flow with clear messaging.
 - No tmux server → no-op with message.
-- Corrupt/missing snapshot → fail without destroying current state; log to
-  `<dir>/anka.log`.
+- Corrupt/missing snapshot → fail without destroying current state; errors
+  surface via `display-message` inside tmux, stderr outside.
 - All writes atomic (tmp + rename); restore non-destructive by default.
 
 ## Testing
