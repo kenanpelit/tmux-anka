@@ -4,6 +4,16 @@ All notable changes to tmux-anka are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] - 2026-07-04
+
+### Fixed
+
+- Snapshot capture (and the menu's window/pane lists) parsed as empty on
+  tmux <= 3.4, which octal-escapes the US (0x1f) field separator in `-F`
+  output as the literal text `\037`; tmux >= 3.5 prints the raw byte.
+  Both forms are now accepted, so `save`/`freeze`/`up`/`menu` work across
+  versions.
+
 ## [0.13.0] - 2026-07-04
 
 ### Added

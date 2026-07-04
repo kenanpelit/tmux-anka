@@ -27,6 +27,7 @@ pub struct Item {
 // ── Source parsers (pure) ────────────────────────────────────────────────────
 
 pub fn parse_windows(out: &str) -> Vec<Item> {
+    let out = crate::tmux::unescape_us(out); // tmux <=3.4 escapes US as `\037`
     out.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(US).collect();
@@ -43,6 +44,7 @@ pub fn parse_windows(out: &str) -> Vec<Item> {
 }
 
 pub fn parse_panes(out: &str) -> Vec<Item> {
+    let out = crate::tmux::unescape_us(out); // tmux <=3.4 escapes US as `\037`
     out.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(US).collect();

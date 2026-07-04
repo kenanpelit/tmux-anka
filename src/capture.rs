@@ -208,6 +208,10 @@ fn classify_restore(cfg: &Config, pane_command: &str, fg: Option<(String, bool)>
 /// with `\n`, restoring the embedded newline verbatim inside whichever field
 /// it fell in) and recount, until the column count is satisfied.
 fn records(out: &str, fields: usize) -> Vec<Vec<String>> {
+    // tmux <= 3.4 emits our US separator as the literal text `\037`
+    // (see tmux::unescape_us) — without this, every record parses as one
+    // column and the whole snapshot silently comes out empty.
+    let out = crate::tmux::unescape_us(out);
     let mut result = Vec::new();
     let mut lines = out.lines();
     while let Some(first) = lines.next() {
@@ -342,6 +346,18 @@ mod tests {
 
     fn rec(fields: &[&str]) -> String {
         fields.join(&US.to_string())
+    }
+
+    #[test]
+    fn records_accepts_tmux34_octal_escaped_separators() {
+        // tmux <= 3.4 prints the 0x1f separator as the literal text `\037`.
+        let out =
+            ["proj", "12", "0", "%1", "1", "999", "50", "/tmp", "vim", "title"].join("\\037");
+        let rows = records(&out, 10);
+        assert_eq!(rows.len(), 1, "escaped-separator record must parse: {rows:?}");
+        assert_eq!(rows[0][0], "proj");
+        assert_eq!(rows[0][3], "%1");
+        assert_eq!(rows[0][9], "title");
     }
 
     #[test]

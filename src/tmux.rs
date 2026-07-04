@@ -35,6 +35,17 @@ pub fn server_running() -> bool {
         .unwrap_or(false)
 }
 
+/// Normalize the US (0x1f) field separator in `-F` output across tmux
+/// versions: tmux <= 3.4 octal-escapes control bytes when printing list/`-F`
+/// output, so our separator arrives as the literal four characters `\037`;
+/// tmux >= 3.5 prints the raw byte. Callers split on the raw byte, so map
+/// the escaped form back. (Cost: free text that literally contains `\037`
+/// gains a spurious split — the free-text field is deliberately last in
+/// every format we parse, so structured fields stay correct.)
+pub fn unescape_us(s: &str) -> String {
+    s.replace("\\037", "\u{1f}")
+}
+
 /// Read a global option value (e.g. `@anka-foo`). Empty string when unset.
 pub fn global_option(name: &str) -> String {
     run(&["show-options", "-gqv", name]).unwrap_or_default()
