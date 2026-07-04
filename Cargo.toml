@@ -1,6 +1,6 @@
 [package]
 name = "anka"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 rust-version = "1.85"
 description = "Freeze and resurrect tmux sessions, exactly."

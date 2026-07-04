@@ -4,6 +4,15 @@ All notable changes to tmux-anka are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.2] - 2026-07-04
+
+### Fixed
+
+- Restore on tmux <= 3.4: the first window of each session stayed at
+  base-index instead of its recorded index (same octal-escaped separator
+  seam as 0.13.1, this time in `new-session -P -F` output). Full test
+  suite now passes on tmux 3.4 in CI.
+
 ## [0.13.1] - 2026-07-04
 
 ### Fixed
