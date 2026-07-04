@@ -12,6 +12,11 @@ pub struct Config {
     pub restore_overwrite: bool,
     pub switch_preview: bool,
     pub zoxide: bool,
+    /// How many prior versions of a saved snapshot to keep as `.1`, `.2`, …
+    /// generations before overwriting it (`@anka-save-generations`, `0` disables).
+    pub save_generations: u32,
+    /// Scrollback lines captured per pane (`@anka-history-limit`, `0` = unlimited).
+    pub history_limit: u64,
 }
 
 fn opt_or(name: &str, default: &str) -> String {
@@ -48,6 +53,8 @@ impl Config {
             restore_overwrite: opt_bool("@anka-restore-overwrite", false),
             switch_preview: opt_bool("@anka-switch-preview", true),
             zoxide: opt_bool("@anka-zoxide", true),
+            save_generations: opt_or("@anka-save-generations", "3").parse().unwrap_or(3),
+            history_limit: opt_or("@anka-history-limit", "2000").parse().unwrap_or(2000),
         }
     }
 }

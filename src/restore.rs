@@ -229,6 +229,8 @@ mod tests {
             restore_overwrite: false,
             switch_preview: false,
             zoxide: false,
+            save_generations: 3,
+            history_limit: 2000,
         }
     }
 
