@@ -134,6 +134,10 @@ fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<
         }
         let out = run_str(&v)?;
         let first_pane_id = if wi == 0 {
+            // tmux <= 3.4 octal-escapes the US byte in `-P -F` output too
+            // (see tmux::unescape_us) — without this the split fails and the
+            // move-window below gets a garbage source target.
+            let out = tmux::unescape_us(&out);
             let (pane_id, created_idx) = out.split_once(US).unwrap_or((out.as_str(), ""));
             if created_idx.parse::<u32>().ok() != Some(w.index) {
                 tmux::run_ok(&[
