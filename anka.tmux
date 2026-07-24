@@ -129,22 +129,38 @@ RESTORE_ON_START="$(opt @anka-restore-on-start)"; RESTORE_ON_START="${RESTORE_ON
 if [ "$RESTORE_ON_START" = "on" ]; then
     "$BINARY" autostart >/dev/null 2>&1
 
-    # Defensive: a pane fresh out of restore should never have unsent text
-    # sitting in its buffer (2026-07-24/25 — stale, unrelated multi-line shell
-    # commands kept reappearing, unexecuted, in whichever pane restore left
-    # focused; source not pinned down — ruled out anka's own restore.rs
-    # (RestoreKind::Shell sends no keys), this script's own bindings, and
-    # every tmux hook on the live server). Log what was there for forensics,
-    # then clear every session's current pane before any client can attach.
+    # Defensive: root cause found 2026-07-25 — restore_session() (restore.rs)
+    # sends `send-keys -l "<cmd>"` + `send-keys Enter` to each pane right after
+    # creating it, with no wait for the shell to be ready. Restoring many
+    # sessions/panes at once means zsh (this user's ~2000-line .zshrc: zinit,
+    # compinit, fzf/atuin init) can still be mid-startup when Enter arrives,
+    # so it's missed and the command sits typed-but-unsubmitted — in ANY pane,
+    # not just the one a session happens to leave focused (confirmed via
+    # ~/.cache/tm-stray-pane.log: a `claude -r ...` launch caught partially
+    # typed, growing across two separate restarts — a real race, not a fluke).
+    # The real fix belongs in restore.rs (wait for shell readiness before
+    # send-keys); until that lands, sweep every pane still sitting at a plain
+    # shell prompt and clear it. Skip panes where a real program already took
+    # over (nvim/claude/yazi/ssh/...) — those either launched fine or are live
+    # programs a stray C-u could disturb; only a bare shell can have this
+    # specific leftover-buffer problem.
     STRAY_LOG="${XDG_CACHE_HOME:-$HOME/.cache}/tm-stray-pane.log"
-    tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r s; do
-        stray="$(tmux capture-pane -p -t "$s" 2>/dev/null)"
-        if [ -n "$stray" ]; then
+    tmux list-panes -a -F '#{pane_id} #{pane_current_command}' 2>/dev/null | while IFS=' ' read -r pid cmd; do
+        case "$cmd" in
+            zsh|bash|sh|-zsh|-bash|-sh) ;;
+            *) continue ;;
+        esac
+        stray="$(tmux capture-pane -p -t "$pid" 2>/dev/null)"
+        # A clean fresh prompt is ~2 non-blank lines (cwd + arrow); more than
+        # that means real leftover content — log only the suspicious ones so
+        # this file doesn't fill up with every ordinary empty shell.
+        nonblank="$(printf '%s\n' "$stray" | grep -c '[^[:space:]]')"
+        if [ "$nonblank" -gt 2 ]; then
             {
-                printf '=== %s session=%s (anka.tmux autostart) ===\n' "$(date '+%F %T')" "$s"
+                printf '=== %s pane=%s (anka.tmux autostart) ===\n' "$(date '+%F %T')" "$pid"
                 printf '%s\n---\n' "$stray"
             } >>"$STRAY_LOG" 2>/dev/null
         fi
-        tmux send-keys -t "$s" C-u 2>/dev/null
+        tmux send-keys -t "$pid" C-u 2>/dev/null
     done
 fi
