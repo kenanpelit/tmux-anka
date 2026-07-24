@@ -117,7 +117,15 @@ if [ "$INTERVAL" != "0" ]; then
 fi
 
 # ── Auto-restore on server start (once per server, guarded inside the binary) ─
+# Synchronous (no trailing `&`): this runs while TPM is still sourcing plugins,
+# before the client can send any keystrokes. Backgrounding it let restore's own
+# session/window/pane creation and switch-client/select-pane calls race against
+# whatever the user typed in the first seconds after `tmux` — an early
+# keystroke (e.g. a paste binding) could land on a pane that didn't exist yet
+# or lose the race for focus, landing wherever restore's last switch-client
+# happened to point. Blocking here delays the first prompt until restore
+# settles, but makes that class of misdirected input impossible.
 RESTORE_ON_START="$(opt @anka-restore-on-start)"; RESTORE_ON_START="${RESTORE_ON_START:-on}"
 if [ "$RESTORE_ON_START" = "on" ]; then
-    "$BINARY" autostart >/dev/null 2>&1 &
+    "$BINARY" autostart >/dev/null 2>&1
 fi
