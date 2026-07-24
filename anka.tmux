@@ -128,4 +128,23 @@ fi
 RESTORE_ON_START="$(opt @anka-restore-on-start)"; RESTORE_ON_START="${RESTORE_ON_START:-on}"
 if [ "$RESTORE_ON_START" = "on" ]; then
     "$BINARY" autostart >/dev/null 2>&1
+
+    # Defensive: a pane fresh out of restore should never have unsent text
+    # sitting in its buffer (2026-07-24/25 — stale, unrelated multi-line shell
+    # commands kept reappearing, unexecuted, in whichever pane restore left
+    # focused; source not pinned down — ruled out anka's own restore.rs
+    # (RestoreKind::Shell sends no keys), this script's own bindings, and
+    # every tmux hook on the live server). Log what was there for forensics,
+    # then clear every session's current pane before any client can attach.
+    STRAY_LOG="${XDG_CACHE_HOME:-$HOME/.cache}/tm-stray-pane.log"
+    tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r s; do
+        stray="$(tmux capture-pane -p -t "$s" 2>/dev/null)"
+        if [ -n "$stray" ]; then
+            {
+                printf '=== %s session=%s (anka.tmux autostart) ===\n' "$(date '+%F %T')" "$s"
+                printf '%s\n---\n' "$stray"
+            } >>"$STRAY_LOG" 2>/dev/null
+        fi
+        tmux send-keys -t "$s" C-u 2>/dev/null
+    done
 fi
