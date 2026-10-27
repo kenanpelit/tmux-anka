@@ -18,6 +18,15 @@ All notable changes to tmux-anka are documented here. The format follows
   pattern and replay the stable `hermes <args>` entrypoint instead of
   either giving up or replaying the version/date-pinned bootstrap source
   verbatim.
+- Restore-on-start no longer runs backgrounded from `anka.tmux`: the
+  trailing `&` let restore's session/pane creation and focus changes race
+  a client's first keystrokes. Autostart is now synchronous.
+- Stray, unsent command text could be left in restored panes when a slow
+  shell startup swallowed the `Enter` sent after a launch command. After
+  autostart, every pane still on a bare shell (`zsh`/`bash`/`sh`) is now
+  cleared (`C-u`) before a client attaches; panes with leftover input are
+  logged to `~/.cache/tm-stray-pane.log`. Panes running a real program
+  are never touched.
 
 ## [0.13.2] - 2026-07-04
 
