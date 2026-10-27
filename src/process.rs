@@ -82,14 +82,46 @@ fn reconstruct(raw: &[u8]) -> Option<(String, bool)> {
         0 => None,
         1 => parts.into_iter().next().map(|s| (normalize_launcher(&s), true)),
         _ => Some((
-            parts
-                .iter()
-                .map(|p| shell_quote(p))
-                .collect::<Vec<_>>()
-                .join(" "),
+            hermes_relaunch(&parts).unwrap_or_else(|| {
+                parts
+                    .iter()
+                    .map(|p| shell_quote(p))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
             false,
         )),
     }
+}
+
+/// Repair a `hermes` launcher invocation.
+///
+/// `hermes` is a double shell-script wrapper that `exec`s into a bare
+/// `python3 -I -c '<bootstrap source>' <args…>` (same pid throughout, since
+/// `exec` doesn't fork) — by the time this reads `/proc/<pid>/cmdline`, the
+/// original `hermes` argv0 is long gone, and it only renames its own comm to
+/// "hermes" from inside that bootstrap (via `prctl`/`setproctitle`), too late
+/// for tmux's own `pane_current_command` to see (cached at the last `execve`,
+/// which already happened). Replaying the bootstrap source verbatim would
+/// work today, but it's version/date-pinned (the embedded python toolchain
+/// path, the bootstrap code itself) and breaks the moment `hermes update`
+/// ships a new one. Detect the pattern instead and replay the stable
+/// entrypoint — `hermes <args…>` — exactly as the user typed it.
+fn hermes_relaunch(parts: &[String]) -> Option<String> {
+    if base_name(parts.first()?) != "python3" {
+        return None;
+    }
+    let c_idx = parts.iter().position(|p| p == "-c")?;
+    let script = parts.get(c_idx + 1)?;
+    if !script.contains("hermes_bootstrap") {
+        return None;
+    }
+    let mut out = String::from("hermes");
+    for arg in &parts[c_idx + 2..] {
+        out.push(' ');
+        out.push_str(&shell_quote(arg));
+    }
+    Some(out)
 }
 
 /// Repair the `npm exec` / `npx` / `pnpm dlx|exec` / `yarn dlx` launcher form.
@@ -212,6 +244,43 @@ mod tests {
     fn escapes_embedded_single_quotes() {
         let raw = b"sh\0-c\0echo 'hi'\0";
         assert_eq!(reconstruct(raw).unwrap().0, r#"sh -c 'echo '\''hi'\'''"#);
+    }
+
+    // `hermes` exec-chains into a bare `python3 -I -c '<bootstrap>' <args>` —
+    // replay the stable `hermes <args>` entrypoint, not the pinned bootstrap.
+    #[test]
+    fn hermes_relaunch_replays_stable_entrypoint() {
+        let raw = [
+            "/home/kenan/.hermes/tools/python-3.14.9+20261021-linux-x64/bin/python3",
+            "-I",
+            "-c",
+            "import hermes_bootstrap\n...",
+            "--continue",
+        ]
+        .join("\0")
+            + "\0";
+        assert_eq!(reconstruct(raw.as_bytes()).unwrap(), ("hermes --continue".to_string(), false));
+    }
+
+    #[test]
+    fn hermes_relaunch_with_no_trailing_args() {
+        let raw = [
+            "/usr/bin/python3",
+            "-I",
+            "-c",
+            "import hermes_bootstrap\n...",
+        ]
+        .join("\0")
+            + "\0";
+        assert_eq!(reconstruct(raw.as_bytes()).unwrap(), ("hermes".to_string(), false));
+    }
+
+    // A plain `python3 -c ...` with no hermes marker is unaffected: quoted and
+    // joined like any other multi-element argv.
+    #[test]
+    fn non_hermes_python_c_is_unaffected() {
+        let raw = b"python3\0-c\0print(1)\0";
+        assert_eq!(reconstruct(raw).unwrap(), ("python3 -c 'print(1)'".to_string(), false));
     }
 
     // npm/node rewrite argv into one space-joined string (setproctitle), padded

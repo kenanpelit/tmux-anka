@@ -4,6 +4,21 @@ All notable changes to tmux-anka are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.3] - 2026-10-28
+
+### Fixed
+
+- A pane running `hermes` (which exec-chains through two shell-script
+  wrappers into a bare `python3 -I -c '<bootstrap>' <args>`, same pid
+  throughout) was restored as a plain shell: `hermes` only renames its
+  own process title from inside that bootstrap, too late for tmux's
+  `pane_current_command` to see (it's cached at the last `execve`, which
+  already happened by then), and `@anka-restore-processes` had nothing
+  else to match against. Detect the `python3 -c '<hermes bootstrap>'`
+  pattern and replay the stable `hermes <args>` entrypoint instead of
+  either giving up or replaying the version/date-pinned bootstrap source
+  verbatim.
+
 ## [0.13.2] - 2026-07-04
 
 ### Fixed
