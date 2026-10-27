@@ -4,6 +4,22 @@ All notable changes to tmux-anka are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.4] - 2026-10-28
+
+### Fixed
+
+- Restored panes could end up with their relaunch command truncated or
+  typed-but-never-submitted: keys were sent right after each pane was
+  created, while a heavy shell rc was still starting up. Restore now
+  creates every pane first, then types each launch only once that pane's
+  tty shows a line editor waiting at the prompt (non-canonical mode),
+  polling all panes together, capped at 15s per restore.
+- A save racing a tmux server shutdown (e.g. the interval daemon during
+  `kill-server`) could fail to read `@anka-dir`, fall back to the default
+  store, and overwrite the user's real snapshot with another server's
+  sessions. Saves now resolve the store once up front and refuse to write
+  if it can't be determined.
+
 ## [0.13.3] - 2026-10-28
 
 ### Fixed

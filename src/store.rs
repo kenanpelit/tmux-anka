@@ -5,6 +5,7 @@ use std::fs;
 use std::os::unix::fs as unixfs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::tmux;
 
@@ -17,10 +18,54 @@ pub const DEFAULT_SNAPSHOT: &str = "default";
 /// resolve a data dir (no resolvable home) — snapshots silently living in
 /// `/tmp` (gone on reboot) would otherwise defeat the whole plugin.
 pub fn base_dir() -> PathBuf {
-    let configured = tmux::global_option("@anka-dir");
-    if !configured.is_empty() {
-        return expand(&configured);
+    if let Some(pinned) = PINNED_BASE_DIR.lock().ok().and_then(|g| g.clone()) {
+        return pinned;
     }
+    // An unreachable server reads as "unset" here — fine for lookups, but a
+    // writer must go through `pin_base_dir` instead (see there).
+    resolve_base_dir().unwrap_or_else(|_| default_base_dir())
+}
+
+/// The store a writer resolved up front; overrides [`base_dir`] while held.
+static PINNED_BASE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Resolve the store once, *failing* if tmux can't be asked, and pin it for
+/// the rest of the operation (until the guard drops).
+///
+/// A save reads `@anka-dir` several times, after the capture. If the server
+/// goes away in between (a kill-server racing the interval daemon), the
+/// lookup used to fail silently, read as "unset", and fall back to the
+/// default store — writing a foreign server's snapshot over the user's real
+/// one. Pinning resolves the directory while the server is still known to be
+/// up and refuses to write at all if it can't.
+pub fn pin_base_dir() -> Result<BaseDirPin> {
+    let dir = resolve_base_dir().context("reading @anka-dir")?;
+    if let Ok(mut g) = PINNED_BASE_DIR.lock() {
+        *g = Some(dir);
+    }
+    Ok(BaseDirPin(()))
+}
+
+/// Unpins the store on drop.
+pub struct BaseDirPin(());
+
+impl Drop for BaseDirPin {
+    fn drop(&mut self) {
+        if let Ok(mut g) = PINNED_BASE_DIR.lock() {
+            *g = None;
+        }
+    }
+}
+
+fn resolve_base_dir() -> Result<PathBuf> {
+    let configured = tmux::run(&["show-options", "-gqv", "@anka-dir"])?;
+    if !configured.is_empty() {
+        return Ok(expand(&configured));
+    }
+    Ok(default_base_dir())
+}
+
+fn default_base_dir() -> PathBuf {
     default_base_dir_from(
         dirs::data_dir(),
         std::env::var_os("HOME")

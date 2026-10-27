@@ -4,10 +4,14 @@
 //! `@anka-restore-overwrite`), their windows in index order, the panes as plain
 //! shells, then apply the saved tmux layout for pixel-exact geometry. Programs
 //! (process/nvim panes) are relaunched by typing into the pane's shell, so a
-//! pane survives even if its command exits or fails (e.g. ssh).
+//! pane survives even if its command exits or fails (e.g. ssh). The typing is
+//! deferred until every pane exists and is then sent to each pane only once its
+//! shell sits at a prompt (see [`launch_when_ready`]).
 
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::capture::US;
 use crate::config::Config;
@@ -34,6 +38,7 @@ pub fn restore_snapshot(snap: &Snapshot) -> Result<usize> {
     let existing = existing_sessions();
     let size = client_size(snap);
     let mut restored = 0usize;
+    let mut pending = Vec::new();
     for session in &snap.sessions {
         if existing.contains(&session.name) {
             if !cfg.restore_overwrite {
@@ -44,10 +49,13 @@ pub fn restore_snapshot(snap: &Snapshot) -> Result<usize> {
             // aborts the whole restore. `=` pins an exact-name match.
             tmux::run_ok(&["kill-session", "-t", &format!("={}", session.name)]);
         }
-        restore_session(session, &cfg, size)
-            .with_context(|| format!("restoring session '{}'", session.name))?;
+        pending.extend(
+            restore_session(session, &cfg, size)
+                .with_context(|| format!("restoring session '{}'", session.name))?,
+        );
         restored += 1;
     }
+    launch_when_ready(pending);
     if let Some(active) = &snap.client.active_session {
         tmux::run_ok(&["switch-client", "-t", &format!("={active}")]);
     }
@@ -70,8 +78,9 @@ pub fn restore_one(snap: &Snapshot, session_name: &str) -> Result<bool> {
         // Overwrite mode: replace the live session (see restore_snapshot).
         tmux::run_ok(&["kill-session", "-t", &format!("={}", session.name)]);
     }
-    restore_session(session, &cfg, client_size(snap))
+    let pending = restore_session(session, &cfg, client_size(snap))
         .with_context(|| format!("restoring session '{}'", session.name))?;
+    launch_when_ready(pending);
     tmux::run_ok(&["switch-client", "-t", &format!("={}", session.name)]);
     Ok(true)
 }
@@ -97,11 +106,17 @@ pub fn autostart() -> Result<()> {
     Ok(())
 }
 
-fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<()> {
+/// A program still to be typed into a freshly created pane: (pane id, command).
+type Launch = (String, String);
+
+/// Rebuild one session as plain shells, returning the program launches it
+/// still needs — the caller sends them via [`launch_when_ready`].
+fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<Vec<Launch>> {
     let mut windows: Vec<&Window> = session.windows.iter().collect();
     windows.sort_by_key(|w| w.index);
 
     let mut active_anchor: Option<String> = None;
+    let mut launches = Vec::new();
 
     for (wi, w) in windows.iter().enumerate() {
         let mut panes: Vec<&Pane> = w.panes.iter().collect();
@@ -170,12 +185,12 @@ fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<
             tmux::run_ok(&["select-layout", "-t", &first_pane_id, &w.layout]);
         }
 
-        // Relaunch programs by typing into each pane's shell, so the pane
-        // survives if the command exits or fails (ssh, editors, REPLs, …).
+        // Programs are relaunched by typing into each pane's shell, so the
+        // pane survives if the command exits or fails (ssh, editors, REPLs,
+        // …) — queued here, typed once the shell is ready.
         for (p, pid) in panes.iter().zip(pane_ids.iter()) {
             if let Some(cmd) = launch_cmd(Some(p), cfg) {
-                tmux::run_ok(&["send-keys", "-t", pid, "-l", &cmd]);
-                tmux::run_ok(&["send-keys", "-t", pid, "Enter"]);
+                launches.push((pid.clone(), cmd));
             }
         }
 
@@ -194,7 +209,102 @@ fn restore_session(session: &Session, cfg: &Config, size: (u32, u32)) -> Result<
     if let Some(anchor) = active_anchor {
         tmux::run_ok(&["select-window", "-t", &anchor]);
     }
-    Ok(())
+    Ok(launches)
+}
+
+/// Upper bound on waiting for a restored pane's shell to reach its prompt.
+const LAUNCH_WAIT: Duration = Duration::from_secs(15);
+const LAUNCH_POLL: Duration = Duration::from_millis(50);
+
+/// Type each queued launch into its pane once the pane's shell is ready.
+///
+/// Sending keys right after a pane is created races the shell's startup: a
+/// heavy rc file (zinit, compinit, atuin/fzf init) is still running, and
+/// typeahead arriving then can be partially discarded — the command ends up
+/// truncated, or typed but never submitted because the `Enter` was lost. A
+/// line editor (zle, readline, fish) switches the tty out of canonical mode
+/// while it waits at the prompt, so "pane tty is `-icanon`" on two consecutive
+/// polls is the readiness signal. All panes are polled together, so the total
+/// wait is the slowest shell's startup, not their sum. A pane that never looks
+/// ready (or whose tty can't be inspected) is typed into anyway at the deadline
+/// — the old behaviour, never worse.
+fn launch_when_ready(launches: Vec<Launch>) {
+    if launches.is_empty() {
+        return;
+    }
+    let ttys = pane_ttys();
+    // (pane id, command, tty, consecutive ready polls)
+    let mut waiting: Vec<(String, String, Option<String>, u8)> = launches
+        .into_iter()
+        .map(|(pid, cmd)| {
+            let tty = ttys.iter().find(|(p, _)| *p == pid).map(|(_, t)| t.clone());
+            (pid, cmd, tty, 0)
+        })
+        .collect();
+    let deadline = Instant::now() + LAUNCH_WAIT;
+    loop {
+        let timed_out = Instant::now() >= deadline;
+        waiting.retain_mut(|(pid, cmd, tty, hits)| {
+            let ready = match tty.as_deref().map(tty_line_editing) {
+                Some(Some(true)) => {
+                    *hits += 1;
+                    *hits >= 2
+                }
+                Some(Some(false)) => {
+                    *hits = 0;
+                    false
+                }
+                // No tty, or its termios can't be read: don't wait on it.
+                Some(None) | None => true,
+            };
+            if ready || timed_out {
+                send_launch(pid, cmd);
+                false
+            } else {
+                true
+            }
+        });
+        if waiting.is_empty() {
+            return;
+        }
+        std::thread::sleep(LAUNCH_POLL);
+    }
+}
+
+fn send_launch(pid: &str, cmd: &str) {
+    tmux::run_ok(&["send-keys", "-t", pid, "-l", cmd]);
+    tmux::run_ok(&["send-keys", "-t", pid, "Enter"]);
+}
+
+/// Every pane's (id, tty path).
+fn pane_ttys() -> Vec<(String, String)> {
+    let fmt = format!("#{{pane_id}}{US}#{{pane_tty}}");
+    let out = tmux::run(&["list-panes", "-a", "-F", &fmt]).unwrap_or_default();
+    tmux::unescape_us(&out)
+        .lines()
+        .filter_map(|l| l.split_once(US))
+        .map(|(p, t)| (p.to_string(), t.to_string()))
+        .collect()
+}
+
+/// Whether a line editor currently owns `tty` (non-canonical mode), or `None`
+/// if its termios can't be read.
+fn tty_line_editing(tty: &str) -> Option<bool> {
+    let out = Command::new("stty").args(["-F", tty, "-a"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    stty_noncanonical(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse `stty -a` output: `Some(true)` for `-icanon`, `Some(false)` for
+/// `icanon`, `None` if neither flag is listed.
+fn stty_noncanonical(stty_a: &str) -> Option<bool> {
+    stty_a.split_whitespace().find_map(|w| match w {
+        "-icanon" => Some(true),
+        "icanon" => Some(false),
+        _ => None,
+    })
 }
 
 /// The command to launch a pane with, or `None` for a plain shell.
@@ -319,6 +429,15 @@ mod tests {
     fn nvim_falls_back_to_bare_editor() {
         let p = nvim_pane("/no/such/anka/dir", None);
         assert_eq!(nvim_launch(&p, &cfg("session")), "nvim");
+    }
+
+    #[test]
+    fn stty_noncanonical_reads_the_icanon_flag() {
+        let raw = "speed 38400 baud; rows 50;\n-icrnl -ixon\nisig -icanon -iexten -echo";
+        let cooked = "speed 38400 baud;\nicrnl ixon\nisig icanon iexten echo echoe";
+        assert_eq!(stty_noncanonical(raw), Some(true));
+        assert_eq!(stty_noncanonical(cooked), Some(false));
+        assert_eq!(stty_noncanonical("garbage"), None);
     }
 
     // ── client-size geometry (fix: hardcoded -x 200 -y 50) ──────────────────

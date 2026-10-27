@@ -23,6 +23,8 @@ pub fn save(name: Option<&str>) -> Result<()> {
     let name = name.unwrap_or(store::DEFAULT_SNAPSHOT);
     store::validate_name(name)?;
     let cfg = Config::load();
+    // Resolve the store before capturing, while the server is known to be up.
+    let _store = store::pin_base_dir()?;
 
     let (snap, content_jobs) = capture(&cfg)?;
 
